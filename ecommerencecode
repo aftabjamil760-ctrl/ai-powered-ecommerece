@@ -1,0 +1,3564 @@
+below is my complete  backend ecommerence + authentication file now give next all files folders and where edit in existing of chatbot and what new?config: database.js:const mongoose = require('mongoose')
+
+const connectDB = async () => {
+  try {
+    await mongoose.connect(process.env.MONGODB_URI)
+    console.log("✅ Connected to MongoDB")
+  } catch (err) {
+    console.error("❌ MongoDB connection error:", err)
+    process.exit(1)
+  }
+}
+
+module.exports = connectDB   passport.js:const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
+const User = require('../models/User');
+const crypto = require('crypto');
+
+passport.use(new GoogleStrategy({
+    clientID: process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET,
+    callbackURL: process.env.CALLBACK_URL
+  },
+  async (accessToken, refreshToken, profile, done) => {
+    try {
+      // Check if user already exists
+      let user = await User.findOne({ email: profile.emails[0].value });
+
+      if (user) {
+        return done(null, user);
+      }
+
+      // If not, create new user
+      // Generate a random password since they used Google
+      const randomPassword = crypto.randomBytes(16).toString('hex');
+      
+      user = new User({
+        name: profile.displayName,
+        email: profile.emails[0].value,
+        password: randomPassword,
+        isVerified: true, // Google accounts are already verified
+        verificationToken: undefined
+      });
+
+      await user.save();
+      done(null, user);
+    } catch (err) {
+      done(err, null);
+    }
+  }
+));
+
+module.exports = passport;    productvectorindex.json:{
+  "fields": [
+    {
+      "type": "vector",
+      "path": "embeddings",
+      "numDimensions": 384,
+      "similarity": "cosine"
+    }
+  ]
+}          analyticsController.js:const analyticsService = require('../utils/analyticsService');
+const auth = require('../middleware/authMiddleware');
+
+/**
+ * @desc    Get sales overview (today, week, month, year)
+ * @route   GET /api/analytics/sales-overview
+ * @access  Private (Admin)
+ */
+exports.getSalesOverview = async (req, res) => {
+  try {
+    const overview = await analyticsService.getSalesOverview();
+    
+    res.json({
+      success: true,
+      data: overview
+    });
+  } catch (error) {
+    console.error('Error getting sales overview:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Get sales data for charts
+ * @route   GET /api/analytics/sales-data
+ * @access  Private (Admin)
+ */
+exports.getSalesData = async (req, res) => {
+  try {
+    const { timeRange = '7days' } = req.query;
+    
+    const salesData = await analyticsService.getSalesData(timeRange);
+    
+    res.json({
+      success: true,
+      data: salesData
+    });
+  } catch (error) {
+    console.error('Error getting sales data:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Get top products analytics
+ * @route   GET /api/analytics/top-products
+ * @access  Private (Admin)
+ */
+exports.getTopProducts = async (req, res) => {
+  try {
+    const { limit = 10, timeRange = 'month' } = req.query;
+    
+    const topProducts = await analyticsService.getTopProducts(
+      parseInt(limit), 
+      timeRange
+    );
+    
+    res.json({
+      success: true,
+      data: topProducts
+    });
+  } catch (error) {
+    console.error('Error getting top products:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Get customer analytics
+ * @route   GET /api/analytics/customers
+ * @access  Private (Admin)
+ */
+exports.getCustomerAnalytics = async (req, res) => {
+  try {
+    const customerAnalytics = await analyticsService.getCustomerAnalytics();
+    
+    res.json({
+      success: true,
+      data: customerAnalytics
+    });
+  } catch (error) {
+    console.error('Error getting customer analytics:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Get revenue by category
+ * @route   GET /api/analytics/revenue-by-category
+ * @access  Private (Admin)
+ */
+exports.getRevenueByCategory = async (req, res) => {
+  try {
+    const revenueByCategory = await analyticsService.getRevenueByCategory();
+    
+    res.json({
+      success: true,
+      data: revenueByCategory
+    });
+  } catch (error) {
+    console.error('Error getting revenue by category:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Get dashboard statistics
+ * @route   GET /api/analytics/dashboard
+ * @access  Private (Admin)
+ */
+exports.getDashboardStats = async (req, res) => {
+  try {
+    // Get all stats in parallel
+    const [
+      salesOverview,
+      salesData,
+      topProducts,
+      customerAnalytics,
+      revenueByCategory
+    ] = await Promise.all([
+      analyticsService.getSalesOverview(),
+      analyticsService.getSalesData('7days'),
+      analyticsService.getTopProducts(5, 'month'),
+      analyticsService.getCustomerAnalytics(),
+      analyticsService.getRevenueByCategory()
+    ]);
+
+    // Calculate additional stats
+    const totalRevenue = salesOverview.year.totalRevenue;
+    const totalOrders = salesOverview.year.totalOrders;
+    const totalCustomers = customerAnalytics.totalCustomers;
+    const conversionRate = totalCustomers > 0 ? (totalOrders / totalCustomers) * 100 : 0;
+
+    res.json({
+      success: true,
+      data: {
+        // Key metrics
+        keyMetrics: {
+          totalRevenue,
+          totalOrders,
+          totalCustomers,
+          conversionRate: conversionRate.toFixed(2),
+          averageOrderValue: salesOverview.year.averageOrderValue
+        },
+        
+        // Sales data
+        salesOverview,
+        salesChartData: salesData,
+        
+        // Top performers
+        topProducts: topProducts.slice(0, 5),
+        
+        // Customer insights
+        customerSegments: customerAnalytics.segments,
+        newCustomers: customerAnalytics.newCustomers,
+        
+        // Category performance
+        topCategories: revenueByCategory.slice(0, 5),
+        
+        // Recent activity
+        recentOrders: [], // You can add this
+        recentCustomers: customerAnalytics.topCustomers.slice(0, 5)
+      }
+    });
+  } catch (error) {
+    console.error('Error getting dashboard stats:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Update analytics manually (for testing)
+ * @route   POST /api/analytics/update-daily
+ * @access  Private (Admin)
+ */
+exports.updateDailyAnalytics = async (req, res) => {
+  try {
+    const updatedAnalytics = await analyticsService.updateDailyAnalytics();
+    
+    res.json({
+      success: true,
+      message: 'Daily analytics updated successfully',
+      data: updatedAnalytics
+    });
+  } catch (error) {
+    console.error('Error updating daily analytics:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};
+
+/**
+ * @desc    Export analytics data
+ * @route   GET /api/analytics/export
+ * @access  Private (Admin)
+ */
+exports.exportAnalytics = async (req, res) => {
+  try {
+    const { type = 'sales', format = 'json', startDate, endDate } = req.query;
+    
+    let data;
+    const now = new Date();
+    const defaultStartDate = new Date(now);
+    defaultStartDate.setMonth(now.getMonth() - 1);
+    
+    const start = startDate ? new Date(startDate) : defaultStartDate;
+    const end = endDate ? new Date(endDate) : now;
+
+    switch (type) {
+      case 'sales':
+        // Get orders in date range
+        const orders = await Order.find({
+          createdAt: { $gte: start, $lte: end }
+        }).populate('products.productId');
+        
+        data = orders.map(order => ({
+          orderId: order._id,
+          date: order.createdAt,
+          customer: order.userId,
+          amount: order.totalAmount,
+          status: order.paymentStatus,
+          gateway: order.paymentGateway,
+          products: order.products.map(p => ({
+            name: p.productId.name,
+            quantity: p.quantity,
+            price: p.price
+          }))
+        }));
+        break;
+        
+      case 'customers':
+        const customers = await CustomerAnalytics.find({
+          lastOrderDate: { $gte: start, $lte: end }
+        }).populate('userId');
+        
+        data = customers.map(customer => ({
+          customerId: customer.userId._id,
+          name: customer.userId.name,
+          email: customer.userId.email,
+          totalOrders: customer.totalOrders,
+          totalSpent: customer.totalSpent,
+          firstOrder: customer.firstOrderDate,
+          lastOrder: customer.lastOrderDate,
+          segment: customer.customerSegment
+        }));
+        break;
+        
+      default:
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid export type'
+        });
+    }
+
+    // Return in requested format
+    if (format === 'csv') {
+      // Convert to CSV (you'd need a proper CSV library)
+      res.setHeader('Content-Type', 'text/csv');
+      res.setHeader('Content-Disposition', `attachment; filename=${type}-${Date.now()}.csv`);
+      res.send(JSON.stringify(data));
+    } else {
+      res.json({
+        success: true,
+        data: data,
+        metadata: {
+          type,
+          format,
+          startDate: start,
+          endDate: end,
+          count: data.length
+        }
+      });
+    }
+  } catch (error) {
+    console.error('Error exporting analytics:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message
+    });
+  }
+};  authcontroller.js:const User = require('../models/User');
+const jwt = require('jsonwebtoken');
+const crypto = require('crypto');
+const { sendVerificationEmail } = require('../utils/emailService');
+const bcrypt = require('bcryptjs');
+exports.register = async (req, res) => {
+  try {
+    const { name, email, password } = req.body;
+    
+    // Check if user exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) return res.status(400).json({ error: 'User already exists' });
+
+    // Create 6-digit verification code
+    const verificationToken = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    // Create user
+    const user = new User({
+      name,
+      email,
+      password,
+      verificationToken,
+      isVerified: false
+    });
+    
+    await user.save();
+    
+    // Send verification email
+    await sendVerificationEmail(email, verificationToken);
+    
+    res.status(201).json({ 
+        message: 'Registration successful. Please verify your email.',
+        email: email // Send email back for potential auto-fill
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Existing link verification (keep for backward compatibility or link clicks)
+exports.verifyEmail = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const user = await User.findOne({ verificationToken: token });
+    
+    if (!user) return res.status(400).send('Invalid or expired token.');
+    
+    user.isVerified = true;
+    user.verificationToken = undefined;
+    await user.save();
+    
+    // Redirect to frontend success page
+    res.redirect(`${process.env.PORTFOLIO_URL}/verify-success`);
+  } catch (error) {
+    res.status(500).send(error.message);
+  }
+};
+
+// New Manual Code Verification
+exports.verifyEmailOTP = async (req, res) => {
+  try {
+    const { email, code } = req.body;
+    
+    const user = await User.findOne({ 
+        email: email, 
+        verificationToken: code 
+    });
+    
+    if (!user) return res.status(400).json({ error: 'Invalid verification code' });
+    
+    user.isVerified = true;
+    user.verificationToken = undefined;
+    await user.save();
+    
+    res.json({ message: 'Email verified successfully', success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.deleteAccount = async (req, res) => {
+  try {
+    await User.findByIdAndDelete(req.user._id);
+    res.json({ message: 'User account deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const user = await User.findOne({ email });
+    
+    if (!user) return res.status(400).json({ error: 'Invalid credentials' });
+    
+    // Check if email is verified
+    if (!user.isVerified) return res.status(400).json({ error: 'Please verify your email first' });
+    
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) return res.status(400).json({ error: 'Invalid credentials' });
+    
+    // Generate JWT token
+    const token = jwt.sign({ userId: user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    
+    res.json({ token, user: { id: user._id, name: user.name, email: user.email } });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};  feedbackController.js:const Feedback = require('../models/Feedback');
+const Notification = require('../models/Notification');
+const Order = require('../models/Order');
+
+exports.submitFeedback = async (req, res) => {
+  try {
+    const { productId, orderId, rating, comment } = req.body;
+    const userId = req.user.userId;
+    
+    // Check if order exists and belongs to user
+    const order = await Order.findOne({ _id: orderId, userId });
+    if (!order) return res.status(400).json({ error: 'Order not found' });
+    
+    // Check if feedback already exists
+    const existingFeedback = await Feedback.findOne({ orderId, productId });
+    if (existingFeedback) return res.status(400).json({ error: 'Feedback already submitted' });
+    
+    const feedback = new Feedback({
+      userId,
+      productId,
+      orderId,
+      rating,
+      comment
+    });
+    
+    await feedback.save();
+    
+    res.json({ message: 'Feedback submitted successfully' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.replyToFeedback = async (req, res) => {
+  try {
+    const { feedbackId, reply } = req.body;
+    
+    const feedback = await Feedback.findById(feedbackId);
+    if (!feedback) return res.status(404).json({ error: 'Feedback not found' });
+    
+    feedback.adminReply = reply;
+    feedback.replied = true;
+    await feedback.save();
+    
+    // Create notification for customer
+    const notification = new Notification({
+      userId: feedback.userId,
+      message: `Admin replied to your feedback: ${reply}`,
+      type: 'feedback_reply'
+    });
+    
+    await notification.save();
+    
+    res.json({ message: 'Reply sent and customer notified' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getUserFeedback = async (req, res) => {
+  try {
+    const feedback = await Feedback.find({ userId: req.user.userId }).sort({ createdAt: -1 });
+    res.json(feedback);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getAllFeedback = async (req, res) => {
+  try {
+    const feedback = await Feedback.find().sort({ createdAt: -1 });
+    res.json(feedback);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};    notificationcontroller.js:const Notification = require('../models/Notification');
+
+exports.getNotifications = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ error: 'Not authorized' });
+    }
+
+    const notifications = await Notification.find({ userId: req.user._id }).sort({ createdAt: -1 });
+    res.json(notifications);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.markAsRead = async (req, res) => {
+  try {
+    if (!req.user?._id) {
+      return res.status(401).json({ error: 'Not authorized' });
+    }
+
+    const { notificationId } = req.params;
+    const notification = await Notification.findById(notificationId);
+    
+    if (!notification) return res.status(404).json({ error: 'Notification not found' });
+    if (notification.userId.toString() !== req.user._id.toString()) {
+      return res.status(401).json({ error: 'Not authorized' });
+    }
+
+    notification.isRead = true;
+    await notification.save();
+    
+    res.json({ message: 'Notification marked as read' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};     orderController.js:const Order = require('../models/Order');
+const Product = require('../models/Product');
+const Payment = require('../models/Payment');
+const Notification = require('../models/Notification');
+const { processPayment, verifyStripePayment } = require('../utils/paymentService');
+
+exports.createOrder = async (req, res) => {
+  try {
+    const { products, deliveryAddress } = req.body;
+    const userId = req.user._id;
+    
+    // Calculate total and check stock
+    let totalAmount = 0;
+    for (const item of products) {
+      const product = await Product.findById(item.productId);
+      if (!product) throw new Error(`Product ${item.productId} not found`);
+      if (product.stock < item.quantity) throw new Error(`Insufficient stock for ${product.name}`);
+      
+      totalAmount += (product.price - (product.price * (product.discount / 100))) * item.quantity;
+    }
+    
+    // Create order
+    const order = new Order({
+      userId,
+      products,
+      totalAmount,
+      deliveryAddress,
+      paymentStatus: 'pending',
+      orderStatus: 'processing'
+    });
+    
+    await order.save();
+    
+    // Process payment (integrate with Stripe/Razorpay/etc.)
+    const paymentResult = await processPayment({
+      amount: totalAmount,
+      orderId: order._id,
+      customerEmail: req.user.email
+    });
+    
+    // Update order with payment ID
+    order.paymentId = paymentResult.paymentId;
+    await order.save();
+    
+    res.json({
+      orderId: order._id,
+      paymentUrl: paymentResult.paymentUrl,
+      totalAmount
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.paymentSuccess = async (req, res) => {
+  try {
+    const { orderId, paymentId, gateway = 'stripe' } = req.body;
+    
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (order.userId.toString() !== req.user._id.toString()) {
+      return res.status(401).json({ error: 'Not authorized' });
+    }
+
+    // Idempotency: if already succeeded, don't double-decrement stock
+    if (order.paymentStatus === 'success') {
+      return res.json({ message: 'Order already confirmed.' });
+    }
+
+    // Verify payment before marking order paid
+    if (gateway === 'stripe') {
+      const verification = await verifyStripePayment(paymentId);
+      if (!verification.success) {
+        order.paymentStatus = 'failed';
+        await order.save();
+        return res.status(400).json({ error: 'Stripe payment not confirmed' });
+      }
+    }
+    
+    // Update stock
+    for (const item of order.products) {
+      await Product.findByIdAndUpdate(item.productId, {
+        $inc: { stock: -item.quantity }
+      });
+    }
+    
+    // Update order status
+    order.paymentStatus = 'success';
+    order.orderStatus = 'shipped';
+    order.paymentId = paymentId;
+    await order.save();
+    
+    // Save payment record
+    await Payment.create({
+      userId: order.userId,
+      orderId: order._id,
+      gateway,
+      transactionId: paymentId,
+      amount: order.totalAmount,
+      currency: 'USD',
+      status: 'completed',
+      paymentMethod: 'card',
+      metadata: { orderId: order._id.toString() },
+    });
+
+    // Notify customer (delivery team simulation via order status)
+    await Notification.create({
+      userId: order.userId,
+      type: 'order_update',
+      message: `Payment received for Order #${order._id}. Your order has been handed to delivery team.`,
+    });
+    
+    res.json({ message: 'Payment successful. Order shipped to delivery team.' });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.updateDeliveryStatus = async (req, res) => {
+  try {
+    const { orderId, status } = req.body;
+    
+    const order = await Order.findById(orderId);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+    
+    order.orderStatus = status;
+    await order.save();
+    
+    if (status === 'delivered') {
+      // TODO: Send notification to customer
+      // TODO: Save to service logs
+    }
+    
+    res.json({ message: `Delivery status updated to ${status}` });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getMyOrders = async (req, res) => {
+  try {
+    const orders = await Order.find({ userId: req.user._id }).sort({ createdAt: -1 });
+    res.json(orders);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};   paymentController.js:const paymentService = require('../utils/paymentService');
+
+/**
+ * @desc    Create payment session
+ * @route   POST /api/payments/create
+ * @access  Private
+ */
+exports.createPayment = async (req, res) => {
+  try {
+    const { orderId, amount, currency, gateway, customerDetails } = req.body;
+    const userId = req.user._id;
+
+    // Validate input
+    if (!orderId || !amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid payment details' });
+    }
+
+    // Detect gateway if not specified
+    const selectedGateway = gateway || paymentService.detectPaymentGateway(
+      customerDetails?.country || 'PK',
+      currency || 'PKR'
+    );
+
+    // Prepare payment data
+    const paymentData = {
+      orderId,
+      amount,
+      currency: currency || (selectedGateway === 'easypaisa' ? 'PKR' : 'USD'),
+      customerEmail: req.user.email,
+      customerName: req.user.name,
+      customerPhone: customerDetails?.phone,
+      customerAddress: customerDetails?.address,
+      customerCountry: customerDetails?.country || 'PK',
+    };
+
+    // Process payment
+    const result = await paymentService.processPayment(paymentData, selectedGateway);
+
+    // Save payment record to database (implement as needed)
+    // await PaymentRecord.create({
+    //   userId,
+    //   orderId,
+    //   gateway: selectedGateway,
+    //   transactionId: result.transactionId || result.paymentId,
+    //   amount,
+    //   currency,
+    //   status: 'initiated',
+    // });
+
+    res.json({
+      success: true,
+      message: 'Payment initiated successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Payment creation error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Handle EasyPaisa payment callback/webhook
+ * @route   POST /api/payments/easypaisa-callback
+ * @access  Public
+ */
+exports.handleEasyPaisaCallback = async (req, res) => {
+  try {
+    console.log('EasyPaisa callback received:', req.body);
+    
+    // Verify the callback
+    const verification = await paymentService.verifyEasyPaisaCallback(req.body);
+    
+    if (verification.isVerified) {
+      // Update order status in database
+      // await Order.findByIdAndUpdate(verification.orderId, {
+      //   paymentStatus: verification.status === 'paid' ? 'paid' : 'failed',
+      //   transactionId: verification.transactionId,
+      // });
+      
+      // Send success response to EasyPaisa
+      res.status(200).send('OK');
+    } else {
+      res.status(400).send('Invalid callback');
+    }
+  } catch (error) {
+    console.error('EasyPaisa callback error:', error);
+    res.status(500).send('Error processing callback');
+  }
+};
+
+/**
+ * @desc    Handle Stripe webhook
+ * @route   POST /api/payments/stripe-webhook
+ * @access  Public
+ */
+exports.handleStripeWebhook = async (req, res) => {
+  try {
+    const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+    const sig = req.headers['stripe-signature'];
+    let event;
+
+    try {
+      event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        process.env.STRIPE_WEBHOOK_SECRET
+      );
+    } catch (err) {
+      console.error('Webhook signature verification failed:', err.message);
+      return res.status(400).send(`Webhook Error: ${err.message}`);
+    }
+
+    // Handle the event
+    switch (event.type) {
+      case 'checkout.session.completed':
+        const session = event.data.object;
+        console.log('Payment succeeded:', session.id);
+        
+        // Update order status
+        // await Order.findByIdAndUpdate(session.metadata.orderId, {
+        //   paymentStatus: 'paid',
+        //   paymentId: session.payment_intent,
+        // });
+        break;
+        
+      case 'payment_intent.succeeded':
+        const paymentIntent = event.data.object;
+        console.log('PaymentIntent was successful:', paymentIntent.id);
+        break;
+        
+      case 'payment_intent.payment_failed':
+        const failedPayment = event.data.object;
+        console.log('Payment failed:', failedPayment.id);
+        break;
+        
+      case 'payment_intent.canceled':
+        const canceledPayment = event.data.object;
+        console.log('Payment canceled:', canceledPayment.id);
+        break;
+        
+      default:
+        console.log(`Unhandled event type ${event.type}`);
+    }
+
+    res.json({ received: true });
+  } catch (error) {
+    console.error('Stripe webhook error:', error);
+    res.status(500).send('Error processing webhook');
+  }
+};
+
+/**
+ * @desc    Verify payment status
+ * @route   GET /api/payments/verify/:paymentId
+ * @access  Private
+ */
+exports.verifyPayment = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const { gateway = 'stripe' } = req.query;
+
+    const verification = await paymentService.verifyPayment(paymentId, gateway);
+
+    if (verification.success) {
+      res.json({
+        success: true,
+        message: 'Payment verified successfully',
+        data: verification
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: 'Payment verification failed',
+        details: verification
+      });
+    }
+  } catch (error) {
+    console.error('Payment verification error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Get available payment methods for a country
+ * @route   GET /api/payments/methods/:country
+ * @access  Public
+ */
+exports.getPaymentMethods = (req, res) => {
+  try {
+    const country = req.params.country || 'PK';
+    const methods = paymentService.getAvailablePaymentMethods(country);
+    
+    res.json({
+      success: true,
+      data: {
+        country,
+        methods,
+        defaultGateway: paymentService.detectPaymentGateway(country),
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching payment methods:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Get payment status
+ * @route   GET /api/payments/status/:paymentId
+ * @access  Private
+ */
+exports.getPaymentStatus = async (req, res) => {
+  try {
+    const { paymentId } = req.params;
+    const { gateway = 'stripe' } = req.query;
+
+    const status = await paymentService.getPaymentStatus(paymentId, gateway);
+
+    res.json({
+      success: true,
+      data: status
+    });
+  } catch (error) {
+    console.error('Error fetching payment status:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Refund payment
+ * @route   POST /api/payments/refund
+ * @access  Private
+ */
+exports.refundPayment = async (req, res) => {
+  try {
+    const { paymentId, amount, gateway = 'stripe', reason } = req.body;
+    
+    if (!paymentId || !amount || amount <= 0) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Invalid refund details' 
+      });
+    }
+
+    const refund = await paymentService.refundPayment(paymentId, amount, gateway);
+
+    if (refund.success) {
+      res.json({
+        success: true,
+        message: 'Refund initiated successfully',
+        data: refund
+      });
+    } else {
+      res.status(400).json({
+        success: false,
+        error: refund.message || 'Refund failed'
+      });
+    }
+  } catch (error) {
+    console.error('Refund error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Mock payment for testing
+ * @route   POST /api/payments/mock
+ * @access  Private (Development only)
+ */
+exports.mockPayment = async (req, res) => {
+  try {
+    // Only allow in development
+    if (process.env.NODE_ENV === 'production') {
+      return res.status(403).json({ 
+        success: false,
+        error: 'Mock payments not allowed in production' 
+      });
+    }
+
+    const { orderId, amount, currency = 'PKR' } = req.body;
+    
+    if (!orderId || !amount || amount <= 0) {
+      return res.status(400).json({ 
+        success: false,
+        error: 'Invalid payment details' 
+      });
+    }
+
+    const mockResult = await paymentService.mockProcessPayment({
+      orderId,
+      amount,
+      currency,
+      customerEmail: req.user?.email || 'test@example.com',
+    });
+
+    res.json({
+      success: true,
+      message: 'Mock payment created successfully',
+      data: mockResult
+    });
+  } catch (error) {
+    console.error('Mock payment error:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+};
+
+/**
+ * @desc    Get payment history for user
+ * @route   GET /api/payments/history
+ * @access  Private
+ */
+exports.getPaymentHistory = async (req, res) => {
+  try {
+    const userId = req.user._id;
+    const { page = 1, limit = 10 } = req.query;
+
+    // This would typically query your Payment model
+    // const payments = await Payment.find({ userId })
+    //   .sort({ createdAt: -1 })
+    //   .skip((page - 1) * limit)
+    //   .limit(parseInt(limit));
+
+    // For now, return mock data
+    const mockPayments = [
+      {
+        id: 'pay_123456',
+        orderId: 'order_001',
+        amount: 5000,
+        currency: 'PKR',
+        gateway: 'easypaisa',
+        status: 'completed',
+        createdAt: new Date(Date.now() - 86400000),
+      },
+      {
+        id: 'pay_789012',
+        orderId: 'order_002',
+        amount: 2500,
+        currency: 'USD',
+        gateway: 'stripe',
+        status: 'completed',
+        createdAt: new Date(Date.now() - 172800000),
+      },
+    ];
+
+    res.json({
+      success: true,
+      data: {
+        payments: mockPayments,
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total: 2,
+        pages: 1,
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching payment history:', error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message 
+    });
+  }
+};    productController.js:const Product = require('../models/Product');
+
+const fetchWithTimeout = async (url, options = {}, timeout = 10000) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (compatible; ecommerence-store/1.0; +https://example.com)',
+        Accept: 'application/json',
+        ...options.headers,
+      },
+      signal: controller.signal,
+      ...options,
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      throw new Error(`Fetch failed ${response.status}: ${errorBody}`);
+    }
+
+    return await response.json();
+  } finally {
+    clearTimeout(timeoutId);
+  }
+};
+
+// Get top products (synced with FakeStoreAPI)
+exports.getTopProducts = async (req, res) => {
+  try {
+    // Always include locally seeded test products first (useful for Stripe testing)
+    const localTestProducts = await Product.find({ category: 'test' }).sort({ createdAt: -1 }).limit(10);
+
+    // 1. Fetch from External API
+    const externalProducts = await fetchWithTimeout('https://fakestoreapi.com/products');
+
+    // 2. Map and Sync with MongoDB
+    const syncedProducts = [];
+    
+    for (const item of externalProducts) {
+      // Map external fields to our Product model
+      const productData = {
+        name: item.title,
+        description: item.description,
+        price: item.price,
+        discount: Math.floor(Math.random() * 20), // FakeStoreAPI doesn't have discounts, adding random ones
+        category: item.category,
+        image: item.image,
+        stock: Math.floor(Math.random() * 100) + 1,
+      };
+
+      // Find by name or some unique criteria, update if exists, else create
+      let product = await Product.findOneAndUpdate(
+        { name: productData.name },
+        productData,
+        { upsert: true, new: true }
+      );
+      
+      syncedProducts.push(product);
+    }
+
+    res.json([...localTestProducts, ...syncedProducts].slice(0, 20)); // Return the top 20
+  } catch (error) {
+    console.error('Error fetching external products:', error);
+    // Fallback: return what we have in DB if external fetch fails
+    const products = await Product.find().limit(20);
+    res.json(products);
+  }
+};
+
+// Search products (fetching-then-filtering from internet)
+exports.searchProducts = async (req, res) => {
+  try {
+    const { query } = req.query;
+    
+    if (!query || query.trim() === '') {
+      return res.status(200).json({ 
+        message: 'Please enter a search term',
+        products: [] 
+      });
+    }
+
+    // First search local DB (includes seeded test products)
+    const localMatches = await Product.find({
+      $or: [
+        { name: { $regex: query, $options: 'i' } },
+        { description: { $regex: query, $options: 'i' } },
+        { category: { $regex: query, $options: 'i' } }
+      ]
+    }).limit(50);
+
+    if (localMatches.length > 0) {
+      return res.json(localMatches);
+    }
+    // No local matches — do not query external product APIs here. Return a
+    // clear 'no results' response so the frontend can inform the user.
+    return res.status(200).json({
+      message: `No products found matching "${query}" in the local catalog.`,
+      products: []
+    });
+  } catch (error) {
+    console.error('Error searching external products:', error);
+    // Fallback to local search if internet is down
+    const products = await Product.find({
+      $or: [
+        { name: { $regex: query, $options: 'i' } },
+        { description: { $regex: query, $options: 'i' } },
+        { category: { $regex: query, $options: 'i' } }
+      ]
+    });
+    res.json(products);
+  }
+};
+
+// Get product details
+exports.getProductDetails = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const product = await Product.findById(id);
+    
+    if (!product) return res.status(404).json({ error: 'Product not found' });
+    
+    // Calculate discounted price
+    const discountedPrice = product.price - (product.price * (product.discount / 100));
+    
+    res.json({
+      ...product.toObject(),
+      discountedPrice,
+      finalPrice: discountedPrice.toFixed(2)
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};     analyticsCron.js:const cron = require('node-cron');
+const analyticsService = require('../utils/analyticsService');
+
+// Run daily at midnight
+cron.schedule('0 0 * * *', async () => {
+  console.log('Running daily analytics update...');
+  try {
+    await analyticsService.updateDailyAnalytics();
+    console.log('Daily analytics update completed successfully');
+  } catch (error) {
+    console.error('Error in daily analytics cron job:', error);
+  }
+});
+
+// Run monthly on the 1st at 1 AM
+cron.schedule('0 1 1 * *', async () => {
+  console.log('Running monthly analytics update...');
+  try {
+    await analyticsService.updateMonthlyAnalytics();
+    console.log('Monthly analytics update completed successfully');
+  } catch (error) {
+    console.error('Error in monthly analytics cron job:', error);
+  }
+});
+
+module.exports = cron;     adminauthMiddleware.js:const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+
+const adminAuth = async (req, res, next) => {
+  try {
+    // If 'protect' middleware already ran, req.user will be populated
+    let user = req.user;
+
+    // If not, try to authenticate here
+    if (!user) {
+      if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
+        const token = req.headers.authorization.split(' ')[1];
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        user = await User.findById(decoded.userId).select('-password');
+      }
+    }
+
+    if (user && user.role === 'admin') {
+      req.user = user;
+      next();
+    } else {
+      res.status(403).json({ 
+        success: false, 
+        error: 'Access denied. Administrator privileges required.',
+        currentRole: user ? user.role : 'none'
+      });
+    }
+  } catch (error) {
+    console.error('Admin Auth Error:', error);
+    res.status(401).json({ success: false, error: 'Not authorized, token failed' });
+  }
+};
+
+module.exports = adminAuth;    
+authMiddleware.js:const jwt = require('jsonwebtoken');
+const User = require('../models/User');
+
+const protect = async (req, res, next) => {
+  let token;
+
+  if (
+    req.headers.authorization &&
+    req.headers.authorization.startsWith('Bearer')
+  ) {
+    try {
+      // Get token from header
+      token = req.headers.authorization.split(' ')[1];
+
+      // Verify token
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+
+      // Get user from the token
+      req.user = await User.findById(decoded.userId).select('-password');
+
+      next();
+    } catch (error) {
+      console.error(error);
+      res.status(401).json({ error: 'Not authorized' });
+    }
+  }
+
+  if (!token) {
+    res.status(401).json({ error: 'Not authorized, no token' });
+  }
+};
+
+module.exports = { protect };     analytics.js:const mongoose = require('mongoose');
+
+// Daily Sales Analytics Schema
+const dailySalesSchema = new mongoose.Schema({
+  date: {
+    type: Date,
+    required: true,
+    index: true
+  },
+  totalOrders: {
+    type: Number,
+    default: 0
+  },
+  totalRevenue: {
+    type: Number,
+    default: 0
+  },
+  totalProductsSold: {
+    type: Number,
+    default: 0
+  },
+  averageOrderValue: {
+    type: Number,
+    default: 0
+  },
+  successfulOrders: {
+    type: Number,
+    default: 0
+  },
+  failedOrders: {
+    type: Number,
+    default: 0
+  },
+  pendingOrders: {
+    type: Number,
+    default: 0
+  },
+  // Revenue by payment method
+  revenueByGateway: {
+    stripe: { type: Number, default: 0 },
+    easypaisa: { type: Number, default: 0 },
+    jazzcash: { type: Number, default: 0 },
+    cod: { type: Number, default: 0 }
+  },
+  // Top products sold
+  topProducts: [{
+    productId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Product'
+    },
+    name: String,
+    quantity: Number,
+    revenue: Number
+  }],
+  // Customer metrics
+  newCustomers: {
+    type: Number,
+    default: 0
+  },
+  returningCustomers: {
+    type: Number,
+    default: 0
+  },
+  // Traffic source (if you integrate)
+  trafficSources: {
+    direct: { type: Number, default: 0 },
+    organic: { type: Number, default: 0 },
+    referral: { type: Number, default: 0 },
+    social: { type: Number, default: 0 }
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Monthly Analytics Schema
+const monthlyAnalyticsSchema = new mongoose.Schema({
+  year: {
+    type: Number,
+    required: true,
+    index: true
+  },
+  month: {
+    type: Number,
+    required: true,
+    min: 1,
+    max: 12,
+    index: true
+  },
+  totalOrders: {
+    type: Number,
+    default: 0
+  },
+  totalRevenue: {
+    type: Number,
+    default: 0
+  },
+  totalProductsSold: {
+    type: Number,
+    default: 0
+  },
+  averageOrderValue: {
+    type: Number,
+    default: 0
+  },
+  // Monthly growth
+  revenueGrowth: {
+    type: Number,
+    default: 0
+  },
+  orderGrowth: {
+    type: Number,
+    default: 0
+  },
+  // Customer metrics
+  totalCustomers: {
+    type: Number,
+    default: 0
+  },
+  customerGrowth: {
+    type: Number,
+    default: 0
+  },
+  // Category performance
+  categoryPerformance: [{
+    category: String,
+    revenue: Number,
+    orders: Number,
+    productsSold: Number
+  }],
+  // Payment method distribution
+  paymentMethodDistribution: {
+    stripe: { type: Number, default: 0 },
+    easypaisa: { type: Number, default: 0 },
+    jazzcash: { type: Number, default: 0 },
+    cod: { type: Number, default: 0 }
+  },
+  // Top performing products
+  topProducts: [{
+    productId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Product'
+    },
+    name: String,
+    quantity: Number,
+    revenue: Number
+  }],
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Product Analytics Schema
+const productAnalyticsSchema = new mongoose.Schema({
+  productId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true,
+    index: true
+  },
+  totalSold: {
+    type: Number,
+    default: 0
+  },
+  totalRevenue: {
+    type: Number,
+    default: 0
+  },
+  dailySales: [{
+    date: Date,
+    quantity: Number,
+    revenue: Number
+  }],
+  monthlySales: [{
+    year: Number,
+    month: Number,
+    quantity: Number,
+    revenue: Number
+  }],
+  views: {
+    type: Number,
+    default: 0
+  },
+  addToCart: {
+    type: Number,
+    default: 0
+  },
+  conversionRate: {
+    type: Number,
+    default: 0
+  },
+  averageRating: {
+    type: Number,
+    default: 0
+  },
+  totalReviews: {
+    type: Number,
+    default: 0
+  },
+  lastUpdated: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Customer Analytics Schema
+const customerAnalyticsSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  totalOrders: {
+    type: Number,
+    default: 0
+  },
+  totalSpent: {
+    type: Number,
+    default: 0
+  },
+  averageOrderValue: {
+    type: Number,
+    default: 0
+  },
+  firstOrderDate: Date,
+  lastOrderDate: Date,
+  orderFrequency: {
+    type: Number,
+    default: 0 // days between orders
+  },
+  favoriteCategories: [String],
+  cartAbandonmentRate: {
+    type: Number,
+    default: 0
+  },
+  lifetimeValue: {
+    type: Number,
+    default: 0
+  },
+  customerSegment: {
+    type: String,
+    enum: ['new', 'regular', 'vip', 'inactive'],
+    default: 'new'
+  },
+  orderHistory: [{
+    orderId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Order'
+    },
+    date: Date,
+    amount: Number,
+    status: String
+  }],
+  lastUpdated: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+const DailySales = mongoose.model('DailySales', dailySalesSchema);
+const MonthlyAnalytics = mongoose.model('MonthlyAnalytics', monthlyAnalyticsSchema);
+const ProductAnalytics = mongoose.model('ProductAnalytics', productAnalyticsSchema);
+const CustomerAnalytics = mongoose.model('CustomerAnalytics', customerAnalyticsSchema);
+
+module.exports = {
+  DailySales,
+  MonthlyAnalytics,
+  ProductAnalytics,
+  CustomerAnalytics
+};  feedback.js:const mongoose = require('mongoose');
+
+const feedbackSchema = new mongoose.Schema({
+  userId: mongoose.Schema.Types.ObjectId,
+  productId: mongoose.Schema.Types.ObjectId,
+  orderId: mongoose.Schema.Types.ObjectId,
+  rating: Number,
+  comment: String,
+  replied: { type: Boolean, default: false },
+  adminReply: String,
+  createdAt: { type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('Feedback', feedbackSchema);    notification.js:const mongoose = require('mongoose');
+
+const notificationSchema = new mongoose.Schema({
+  userId: mongoose.Schema.Types.ObjectId,
+  message: String,
+  type: String, // 'feedback_reply', 'order_update', etc.
+  isRead: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('Notification', notificationSchema);    order.js:const mongoose = require('mongoose');
+
+const orderSchema = new mongoose.Schema({
+  userId: mongoose.Schema.Types.ObjectId,
+  products: [{
+    productId: mongoose.Schema.Types.ObjectId,
+    quantity: Number,
+    price: Number
+  }],
+  totalAmount: Number,
+  paymentStatus: { type: String, enum: ['pending', 'success', 'failed'], default: 'pending' },
+  orderStatus: { type: String, enum: ['processing', 'shipped', 'delivered', 'cancelled'], default: 'processing' },
+  deliveryAddress: Object,
+  paymentId: String,
+  createdAt: { type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('Order', orderSchema); payment.sj:const mongoose = require('mongoose');
+
+const paymentSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  orderId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Order',
+    required: true
+  },
+  gateway: {
+    type: String,
+    enum: ['stripe', 'easypaisa', 'jazzcash', 'bank_transfer', 'cod'],
+    required: true
+  },
+  transactionId: {
+    type: String,
+    required: true
+  },
+  amount: {
+    type: Number,
+    required: true,
+    min: 0
+  },
+  currency: {
+    type: String,
+    default: 'PKR',
+    enum: ['PKR', 'USD', 'EUR', 'GBP']
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'processing', 'completed', 'failed', 'refunded', 'cancelled'],
+    default: 'pending'
+  },
+  paymentMethod: {
+    type: String,
+    enum: ['card', 'wallet', 'bank', 'cod', 'other']
+  },
+  paymentDetails: {
+    type: Object,
+    default: {}
+  },
+  metadata: {
+    type: Object,
+    default: {}
+  },
+  refundedAmount: {
+    type: Number,
+    default: 0
+  },
+  refunds: [{
+    refundId: String,
+    amount: Number,
+    reason: String,
+    status: String,
+    createdAt: Date
+  }],
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Update timestamp on save
+paymentSchema.pre('save', function(next) {
+  this.updatedAt = Date.now();
+  next();
+});
+
+const Payment = mongoose.model('Payment', paymentSchema);
+
+module.exports = Payment;  product.js:const mongoose = require('mongoose');
+
+const productSchema = new mongoose.Schema({
+  name: String,
+  description: String,
+  price: Number,
+  discount: Number,
+  category: String,
+  stock: Number,
+  image: String,
+  embeddings: {
+    type: [Number],
+    select: false,
+  },
+  ratings: [{
+    userId: mongoose.Schema.Types.ObjectId,
+    rating: Number,
+    review: String
+  }],
+  createdAt: { type: Date, default: Date.now }
+});
+
+module.exports = mongoose.model('Product', productSchema);   user.js:const mongoose = require('mongoose');
+const bcrypt = require('bcryptjs');
+
+const userSchema = new mongoose.Schema({
+  name: String,
+  email: { type: String, unique: true },
+  password: String,
+  isVerified: { type: Boolean, default: false },
+  verificationToken: String,
+  wishlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
+  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+
+userSchema.pre('save', async function() {
+  if (!this.isModified('password')) return;
+  this.password = await bcrypt.hash(this.password, 10);
+});
+
+module.exports = mongoose.model('User', userSchema);   Routes : analyticsRoutes.js:const express = require('express');
+const router = express.Router();
+const analyticsController = require('../controllers/analyticsController');
+const { protect } = require('../middleware/authMiddleware');
+const adminAuth = require('../middleware/adminAuthMiddleware');
+
+// All routes require admin authentication
+router.use(protect);
+router.use(adminAuth);
+
+/**
+ * @route   GET /api/analytics/sales-overview
+ * @desc    Get sales overview
+ * @access  Private (Admin)
+ */
+router.get('/sales-overview', analyticsController.getSalesOverview);
+
+/**
+ * @route   GET /api/analytics/sales-data
+ * @desc    Get sales data for charts
+ * @access  Private (Admin)
+ */
+router.get('/sales-data', analyticsController.getSalesData);
+
+/**
+ * @route   GET /api/analytics/top-products
+ * @desc    Get top products analytics
+ * @access  Private (Admin)
+ */
+router.get('/top-products', analyticsController.getTopProducts);
+
+/**
+ * @route   GET /api/analytics/customers
+ * @desc    Get customer analytics
+ * @access  Private (Admin)
+ */
+router.get('/customers', analyticsController.getCustomerAnalytics);
+
+/**
+ * @route   GET /api/analytics/revenue-by-category
+ * @desc    Get revenue by category
+ * @access  Private (Admin)
+ */
+router.get('/revenue-by-category', analyticsController.getRevenueByCategory);
+
+/**
+ * @route   GET /api/analytics/dashboard
+ * @desc    Get dashboard statistics
+ * @access  Private (Admin)
+ */
+router.get('/dashboard', analyticsController.getDashboardStats);
+
+/**
+ * @route   POST /api/analytics/update-daily
+ * @desc    Update analytics manually
+ * @access  Private (Admin)
+ */
+router.post('/update-daily', analyticsController.updateDailyAnalytics);
+
+/**
+ * @route   GET /api/analytics/export
+ * @desc    Export analytics data
+ * @access  Private (Admin)
+ */
+router.get('/export', analyticsController.exportAnalytics);
+
+module.exports = router;  authRoutes.js:const express = require('express');
+const passport = require('passport');
+const jwt = require('jsonwebtoken');
+const { register, verifyEmail, login, verifyEmailOTP, deleteAccount } = require('../controllers/authController');
+const { protect } = require('../middleware/authMiddleware');
+const router = express.Router();
+
+router.post('/register', register);
+router.get('/verify/:token', verifyEmail);
+router.post('/verify-email', verifyEmailOTP);
+router.post('/login', login);
+
+// Google Auth Routes
+router.get('/google', passport.authenticate('google', { scope: ['profile', 'email'] }));
+
+router.get('/google/callback', 
+  passport.authenticate('google', { session: false, failureRedirect: '/login' }),
+  (req, res) => {
+    // Generate JWT token
+    const token = jwt.sign({ userId: req.user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    
+    // Redirect to frontend with token
+    res.redirect(`${process.env.PORTFOLIO_URL}/google-callback?token=${token}&user=${encodeURIComponent(JSON.stringify({
+      id: req.user._id,
+      name: req.user.name,
+      email: req.user.email
+    }))}`);
+  }
+);
+
+// Delete User Route
+router.delete('/delete', protect, deleteAccount);
+
+module.exports = router; feedbackRoute.js:const express = require('express');
+const { submitFeedback, replyToFeedback, getUserFeedback, getAllFeedback } = require('../controllers/feedbackController');
+const { protect } = require('../middleware/authMiddleware');
+const adminAuth = require('../middleware/adminAuthMiddleware');
+const router = express.Router();
+
+router.post('/submit', protect, submitFeedback);
+router.post('/reply', adminAuth, replyToFeedback);
+router.get('/user', protect, getUserFeedback);
+router.get('/admin', adminAuth, getAllFeedback);
+
+module.exports = router;  notificationRoutes.js:const express = require('express');
+const { getNotifications, markAsRead } = require('../controllers/notificationController');
+const { protect } = require('../middleware/authMiddleware');
+const router = express.Router();
+
+router.get('/', protect, getNotifications);
+router.put('/:notificationId/read', protect, markAsRead);
+
+module.exports = router;  orderRotues.sj:const express = require('express');
+const { createOrder, paymentSuccess, updateDeliveryStatus, getMyOrders } = require('../controllers/orderController');
+const { protect } = require('../middleware/authMiddleware');
+const router = express.Router();
+
+router.get('/', protect, getMyOrders);
+router.post('/create', protect, createOrder);
+router.post('/payment-success', protect, paymentSuccess);
+router.post('/update-delivery', protect, updateDeliveryStatus);
+
+module.exports = router;  paymentroutes.js:const express = require('express');
+const router = express.Router();
+const paymentController = require('../controllers/paymentController');
+const { protect } = require('../middleware/authMiddleware');
+
+// Import middleware for raw body parsing (for Stripe webhook)
+const bodyParser = require('body-parser');
+
+/**
+ * @route   POST /api/payments/create
+ * @desc    Create payment session
+ * @access  Private
+ */
+router.post('/create', protect, paymentController.createPayment);
+
+/**
+ * @route   POST /api/payments/easypaisa-callback
+ * @desc    EasyPaisa payment callback/webhook
+ * @access  Public
+ */
+router.post('/easypaisa-callback', paymentController.handleEasyPaisaCallback);
+
+/**
+ * @route   POST /api/payments/stripe-webhook
+ * @desc    Stripe webhook endpoint
+ * @access  Public
+ */
+router.post(
+  '/stripe-webhook',
+  bodyParser.raw({ type: 'application/json' }),
+  paymentController.handleStripeWebhook
+);
+
+/**
+ * @route   GET /api/payments/verify/:paymentId
+ * @desc    Verify payment status
+ * @access  Private
+ */
+router.get('/verify/:paymentId', protect, paymentController.verifyPayment);
+
+/**
+ * @route   GET /api/payments/methods/:country?
+ * @desc    Get available payment methods for a country
+ * @access  Public
+ */
+router.get('/methods/:country', paymentController.getPaymentMethods);
+router.get('/methods', paymentController.getPaymentMethods);
+
+/**
+ * @route   GET /api/payments/status/:paymentId
+ * @desc    Get payment status
+ * @access  Private
+ */
+router.get('/status/:paymentId', protect, paymentController.getPaymentStatus);
+
+/**
+ * @route   POST /api/payments/refund
+ * @desc    Refund payment
+ * @access  Private
+ */
+router.post('/refund', protect, paymentController.refundPayment);
+
+/**
+ * @route   POST /api/payments/mock
+ * @desc    Create mock payment (development only)
+ * @access  Private
+ */
+router.post('/mock', protect, paymentController.mockPayment);
+
+/**
+ * @route   GET /api/payments/history
+ * @desc    Get payment history for user
+ * @access  Private
+ */
+router.get('/history', protect, paymentController.getPaymentHistory);
+
+module.exports = router;  productRotues.js:const express = require('express');
+const { getTopProducts, searchProducts, getProductDetails } = require('../controllers/productController');
+const router = express.Router();
+
+router.get('/top', getTopProducts);
+router.get('/search', searchProducts);
+router.get('/:id', getProductDetails);
+
+module.exports = router;   Utils: analyticsservice.sj:const { 
+  DailySales, 
+  MonthlyAnalytics, 
+  ProductAnalytics, 
+  CustomerAnalytics 
+} = require('../models/Analytics');
+const Order = require('../models/Order');
+const Product = require('../models/Product');
+const User = require('../models/User');
+
+class AnalyticsService {
+  
+  /**
+   * Update daily sales analytics
+   * Should be called via cron job daily at midnight
+   */
+  async updateDailyAnalytics() {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+
+      // Get yesterday's orders
+      const orders = await Order.find({
+        createdAt: {
+          $gte: yesterday,
+          $lt: today
+        }
+      }).populate('products.productId');
+
+      // Calculate metrics
+      let totalRevenue = 0;
+      let totalOrders = orders.length;
+      let totalProductsSold = 0;
+      let successfulOrders = 0;
+      let failedOrders = 0;
+      let pendingOrders = 0;
+      const revenueByGateway = {
+        stripe: 0,
+        easypaisa: 0,
+        jazzcash: 0,
+        cod: 0
+      };
+      const productSales = {};
+
+      orders.forEach(order => {
+        totalRevenue += order.totalAmount;
+        
+        // Count orders by status
+        if (order.paymentStatus === 'success') successfulOrders++;
+        else if (order.paymentStatus === 'failed') failedOrders++;
+        else pendingOrders++;
+
+        // Revenue by payment gateway
+        if (order.paymentGateway) {
+          revenueByGateway[order.paymentGateway] = 
+            (revenueByGateway[order.paymentGateway] || 0) + order.totalAmount;
+        }
+
+        // Count products sold and track top products
+        order.products.forEach(item => {
+          totalProductsSold += item.quantity;
+          
+          const productId = item.productId._id || item.productId;
+          if (!productSales[productId]) {
+            productSales[productId] = {
+              productId: productId,
+              name: item.productId.name || 'Unknown',
+              quantity: 0,
+              revenue: 0
+            };
+          }
+          productSales[productId].quantity += item.quantity;
+          productSales[productId].revenue += item.price * item.quantity;
+        });
+      });
+
+      // Get top 5 products
+      const topProducts = Object.values(productSales)
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 5);
+
+      // Calculate average order value
+      const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+      // Get new customers
+      const newCustomers = await User.countDocuments({
+        createdAt: {
+          $gte: yesterday,
+          $lt: today
+        },
+        isVerified: true
+      });
+
+      // Create or update daily sales record
+      const dailySales = await DailySales.findOneAndUpdate(
+        { date: yesterday },
+        {
+          date: yesterday,
+          totalOrders,
+          totalRevenue,
+          totalProductsSold,
+          averageOrderValue,
+          successfulOrders,
+          failedOrders,
+          pendingOrders,
+          revenueByGateway,
+          topProducts,
+          newCustomers,
+          returningCustomers: totalOrders - newCustomers
+        },
+        { upsert: true, new: true }
+      );
+
+      // Update monthly analytics
+      await this.updateMonthlyAnalytics(yesterday);
+
+      console.log('Daily analytics updated:', dailySales.date);
+      return dailySales;
+    } catch (error) {
+      console.error('Error updating daily analytics:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update monthly analytics
+   */
+  async updateMonthlyAnalytics(date = new Date()) {
+    try {
+      const year = date.getFullYear();
+      const month = date.getMonth() + 1; // 1-12
+      
+      // Get start and end of month
+      const startOfMonth = new Date(year, month - 1, 1);
+      const endOfMonth = new Date(year, month, 0, 23, 59, 59);
+
+      // Get all orders for the month
+      const orders = await Order.find({
+        createdAt: {
+          $gte: startOfMonth,
+          $lte: endOfMonth
+        }
+      }).populate('products.productId');
+
+      // Calculate metrics
+      let totalRevenue = 0;
+      let totalOrders = orders.length;
+      let totalProductsSold = 0;
+      const categoryPerformance = {};
+      const productSales = {};
+      const paymentMethodDistribution = {
+        stripe: 0,
+        easypaisa: 0,
+        jazzcash: 0,
+        cod: 0
+      };
+
+      orders.forEach(order => {
+        totalRevenue += order.totalAmount;
+        
+        // Payment method distribution
+        if (order.paymentGateway) {
+          paymentMethodDistribution[order.paymentGateway] = 
+            (paymentMethodDistribution[order.paymentGateway] || 0) + 1;
+        }
+
+        // Product and category analysis
+        order.products.forEach(item => {
+          totalProductsSold += item.quantity;
+          
+          // Track product sales
+          const productId = item.productId._id || item.productId;
+          if (!productSales[productId]) {
+            productSales[productId] = {
+              productId: productId,
+              name: item.productId.name || 'Unknown',
+              quantity: 0,
+              revenue: 0
+            };
+          }
+          productSales[productId].quantity += item.quantity;
+          productSales[productId].revenue += item.price * item.quantity;
+
+          // Track category performance
+          const category = item.productId.category || 'Uncategorized';
+          if (!categoryPerformance[category]) {
+            categoryPerformance[category] = {
+              category,
+              revenue: 0,
+              orders: 0,
+              productsSold: 0
+            };
+          }
+          categoryPerformance[category].revenue += item.price * item.quantity;
+          categoryPerformance[category].productsSold += item.quantity;
+        });
+      });
+
+      // Convert category performance to array
+      const categoryPerformanceArray = Object.values(categoryPerformance)
+        .sort((a, b) => b.revenue - a.revenue);
+
+      // Get top 10 products
+      const topProducts = Object.values(productSales)
+        .sort((a, b) => b.revenue - a.revenue)
+        .slice(0, 10);
+
+      // Calculate average order value
+      const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+      // Get total customers
+      const totalCustomers = await User.countDocuments({
+        createdAt: { $lte: endOfMonth },
+        isVerified: true
+      });
+
+      // Get previous month for growth calculation
+      const previousMonth = month === 1 ? 12 : month - 1;
+      const previousYear = month === 1 ? year - 1 : year;
+      const previousMonthData = await MonthlyAnalytics.findOne({
+        year: previousYear,
+        month: previousMonth
+      });
+
+      // Calculate growth
+      const revenueGrowth = previousMonthData 
+        ? ((totalRevenue - previousMonthData.totalRevenue) / previousMonthData.totalRevenue) * 100
+        : 0;
+      
+      const orderGrowth = previousMonthData 
+        ? ((totalOrders - previousMonthData.totalOrders) / previousMonthData.totalOrders) * 100
+        : 0;
+
+      const customerGrowth = previousMonthData 
+        ? ((totalCustomers - previousMonthData.totalCustomers) / previousMonthData.totalCustomers) * 100
+        : 0;
+
+      // Create or update monthly analytics
+      const monthlyAnalytics = await MonthlyAnalytics.findOneAndUpdate(
+        { year, month },
+        {
+          year,
+          month,
+          totalOrders,
+          totalRevenue,
+          totalProductsSold,
+          averageOrderValue,
+          revenueGrowth,
+          orderGrowth,
+          totalCustomers,
+          customerGrowth,
+          categoryPerformance: categoryPerformanceArray,
+          paymentMethodDistribution,
+          topProducts,
+          updatedAt: new Date()
+        },
+        { upsert: true, new: true }
+      );
+
+      return monthlyAnalytics;
+    } catch (error) {
+      console.error('Error updating monthly analytics:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update product analytics when a product is sold
+   */
+  async updateProductAnalytics(productId, quantity, revenue) {
+    try {
+      const today = new Date();
+      const year = today.getFullYear();
+      const month = today.getMonth() + 1;
+      const dateKey = today.toISOString().split('T')[0];
+
+      // Find or create product analytics
+      let productAnalytics = await ProductAnalytics.findOne({ productId });
+
+      if (!productAnalytics) {
+        productAnalytics = new ProductAnalytics({
+          productId,
+          totalSold: 0,
+          totalRevenue: 0
+        });
+      }
+
+      // Update totals
+      productAnalytics.totalSold += quantity;
+      productAnalytics.totalRevenue += revenue;
+
+      // Update daily sales
+      const todaySale = productAnalytics.dailySales.find(
+        sale => sale.date.toISOString().split('T')[0] === dateKey
+      );
+
+      if (todaySale) {
+        todaySale.quantity += quantity;
+        todaySale.revenue += revenue;
+      } else {
+        productAnalytics.dailySales.push({
+          date: today,
+          quantity,
+          revenue
+        });
+      }
+
+      // Update monthly sales
+      const monthSale = productAnalytics.monthlySales.find(
+        sale => sale.year === year && sale.month === month
+      );
+
+      if (monthSale) {
+        monthSale.quantity += quantity;
+        monthSale.revenue += revenue;
+      } else {
+        productAnalytics.monthlySales.push({
+          year,
+          month,
+          quantity,
+          revenue
+        });
+      }
+
+      // Update conversion rate (you need to track views and addToCart separately)
+      // This would be updated from product view tracking
+
+      productAnalytics.lastUpdated = new Date();
+      await productAnalytics.save();
+
+      return productAnalytics;
+    } catch (error) {
+      console.error('Error updating product analytics:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Update customer analytics
+   */
+  async updateCustomerAnalytics(userId, orderData) {
+    try {
+      let customerAnalytics = await CustomerAnalytics.findOne({ userId });
+
+      if (!customerAnalytics) {
+        customerAnalytics = new CustomerAnalytics({
+          userId,
+          totalOrders: 0,
+          totalSpent: 0,
+          firstOrderDate: new Date(),
+          orderHistory: []
+        });
+      }
+
+      // Update totals
+      customerAnalytics.totalOrders += 1;
+      customerAnalytics.totalSpent += orderData.amount;
+      customerAnalytics.lastOrderDate = new Date();
+
+      // Update average order value
+      customerAnalytics.averageOrderValue = 
+        customerAnalytics.totalSpent / customerAnalytics.totalOrders;
+
+      // Calculate order frequency if more than one order
+      if (customerAnalytics.totalOrders > 1 && customerAnalytics.firstOrderDate) {
+        const daysSinceFirstOrder = 
+          (customerAnalytics.lastOrderDate - customerAnalytics.firstOrderDate) / (1000 * 60 * 60 * 24);
+        customerAnalytics.orderFrequency = daysSinceFirstOrder / customerAnalytics.totalOrders;
+      }
+
+      // Add to order history
+      customerAnalytics.orderHistory.push({
+        orderId: orderData.orderId,
+        date: new Date(),
+        amount: orderData.amount,
+        status: orderData.status
+      });
+
+      // Keep only last 50 orders
+      if (customerAnalytics.orderHistory.length > 50) {
+        customerAnalytics.orderHistory = customerAnalytics.orderHistory.slice(-50);
+      }
+
+      // Update customer segment
+      if (customerAnalytics.totalOrders >= 10) {
+        customerAnalytics.customerSegment = 'vip';
+      } else if (customerAnalytics.totalOrders >= 3) {
+        customerAnalytics.customerSegment = 'regular';
+      } else {
+        customerAnalytics.customerSegment = 'new';
+      }
+
+      // Update lifetime value
+      customerAnalytics.lifetimeValue = customerAnalytics.totalSpent;
+
+      customerAnalytics.lastUpdated = new Date();
+      await customerAnalytics.save();
+
+      return customerAnalytics;
+    } catch (error) {
+      console.error('Error updating customer analytics:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get sales overview (today, week, month, year)
+   */
+  async getSalesOverview() {
+    try {
+      const now = new Date();
+      
+      // Today
+      const todayStart = new Date(now);
+      todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(now);
+      todayEnd.setHours(23, 59, 59, 999);
+
+      // This week
+      const weekStart = new Date(now);
+      weekStart.setDate(now.getDate() - now.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+      const weekEnd = new Date(now);
+      weekEnd.setDate(now.getDate() + (6 - now.getDay()));
+      weekEnd.setHours(23, 59, 59, 999);
+
+      // This month
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+      const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+
+      // This year
+      const yearStart = new Date(now.getFullYear(), 0, 1);
+      const yearEnd = new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999);
+
+      // Get orders for each period
+      const [todayOrders, weekOrders, monthOrders, yearOrders] = await Promise.all([
+        Order.find({ createdAt: { $gte: todayStart, $lte: todayEnd } }),
+        Order.find({ createdAt: { $gte: weekStart, $lte: weekEnd } }),
+        Order.find({ createdAt: { $gte: monthStart, $lte: monthEnd } }),
+        Order.find({ createdAt: { $gte: yearStart, $lte: yearEnd } })
+      ]);
+
+      // Calculate metrics for each period
+      const calculateMetrics = (orders) => {
+        const totalRevenue = orders.reduce((sum, order) => sum + order.totalAmount, 0);
+        const totalOrders = orders.length;
+        const successfulOrders = orders.filter(order => order.paymentStatus === 'success').length;
+        const averageOrderValue = totalOrders > 0 ? totalRevenue / totalOrders : 0;
+
+        return {
+          totalRevenue,
+          totalOrders,
+          successfulOrders,
+          averageOrderValue
+        };
+      };
+
+      return {
+        today: calculateMetrics(todayOrders),
+        week: calculateMetrics(weekOrders),
+        month: calculateMetrics(monthOrders),
+        year: calculateMetrics(yearOrders)
+      };
+    } catch (error) {
+      console.error('Error getting sales overview:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get sales data for charts (last 7 days, 30 days, 12 months)
+   */
+  async getSalesData(timeRange = '7days') {
+    try {
+      const now = new Date();
+      let startDate;
+      let groupBy;
+
+      switch (timeRange) {
+        case '7days':
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - 7);
+          groupBy = 'day';
+          break;
+        case '30days':
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - 30);
+          groupBy = 'day';
+          break;
+        case '12months':
+          startDate = new Date(now);
+          startDate.setFullYear(now.getFullYear() - 1);
+          groupBy = 'month';
+          break;
+        default:
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - 7);
+          groupBy = 'day';
+      }
+
+      // Get orders in the date range
+      const orders = await Order.find({
+        createdAt: { $gte: startDate, $lte: now }
+      });
+
+      // Group orders by date
+      const salesByDate = {};
+      orders.forEach(order => {
+        let key;
+        const orderDate = new Date(order.createdAt);
+        
+        if (groupBy === 'day') {
+          key = orderDate.toISOString().split('T')[0]; // YYYY-MM-DD
+        } else {
+          key = `${orderDate.getFullYear()}-${String(orderDate.getMonth() + 1).padStart(2, '0')}`;
+        }
+
+        if (!salesByDate[key]) {
+          salesByDate[key] = {
+            date: key,
+            revenue: 0,
+            orders: 0,
+            productsSold: 0
+          };
+        }
+
+        salesByDate[key].revenue += order.totalAmount;
+        salesByDate[key].orders += 1;
+        salesByDate[key].productsSold += order.products.reduce((sum, item) => sum + item.quantity, 0);
+      });
+
+      // Convert to array and sort by date
+      const salesData = Object.values(salesByDate).sort((a, b) => 
+        new Date(a.date) - new Date(b.date)
+      );
+
+      return {
+        timeRange,
+        groupBy,
+        data: salesData,
+        summary: {
+          totalRevenue: salesData.reduce((sum, item) => sum + item.revenue, 0),
+          totalOrders: salesData.reduce((sum, item) => sum + item.orders, 0),
+          totalProductsSold: salesData.reduce((sum, item) => sum + item.productsSold, 0)
+        }
+      };
+    } catch (error) {
+      console.error('Error getting sales data:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get top products analytics
+   */
+  async getTopProducts(limit = 10, timeRange = 'month') {
+    try {
+      const now = new Date();
+      let startDate;
+
+      switch (timeRange) {
+        case 'today':
+          startDate = new Date(now);
+          startDate.setHours(0, 0, 0, 0);
+          break;
+        case 'week':
+          startDate = new Date(now);
+          startDate.setDate(now.getDate() - 7);
+          break;
+        case 'month':
+          startDate = new Date(now);
+          startDate.setMonth(now.getMonth() - 1);
+          break;
+        case 'year':
+          startDate = new Date(now);
+          startDate.setFullYear(now.getFullYear() - 1);
+          break;
+        default:
+          startDate = new Date(now);
+          startDate.setMonth(now.getMonth() - 1);
+      }
+
+      // Aggregate product sales
+      const topProducts = await Order.aggregate([
+        {
+          $match: {
+            createdAt: { $gte: startDate, $lte: now },
+            paymentStatus: 'success'
+          }
+        },
+        { $unwind: '$products' },
+        {
+          $group: {
+            _id: '$products.productId',
+            totalSold: { $sum: '$products.quantity' },
+            totalRevenue: { $sum: { $multiply: ['$products.price', '$products.quantity'] } },
+            orderCount: { $sum: 1 }
+          }
+        },
+        {
+          $lookup: {
+            from: 'products',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'productDetails'
+          }
+        },
+        { $unwind: '$productDetails' },
+        {
+          $project: {
+            productId: '$_id',
+            name: '$productDetails.name',
+            category: '$productDetails.category',
+            price: '$productDetails.price',
+            image: '$productDetails.image',
+            totalSold: 1,
+            totalRevenue: 1,
+            orderCount: 1,
+            averagePrice: { $divide: ['$totalRevenue', '$totalSold'] }
+          }
+        },
+        { $sort: { totalRevenue: -1 } },
+        { $limit: limit }
+      ]);
+
+      return topProducts;
+    } catch (error) {
+      console.error('Error getting top products:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get customer analytics
+   */
+  async getCustomerAnalytics() {
+    try {
+      // Get total customers
+      const totalCustomers = await User.countDocuments({ isVerified: true });
+      
+      // Get new customers this month
+      const monthStart = new Date();
+      monthStart.setDate(1);
+      monthStart.setHours(0, 0, 0, 0);
+      
+      const newCustomers = await User.countDocuments({
+        createdAt: { $gte: monthStart },
+        isVerified: true
+      });
+
+      // Get customer segments
+      const customerSegments = await CustomerAnalytics.aggregate([
+        {
+          $group: {
+            _id: '$customerSegment',
+            count: { $sum: 1 },
+            avgLifetimeValue: { $avg: '$lifetimeValue' },
+            avgOrders: { $avg: '$totalOrders' }
+          }
+        }
+      ]);
+
+      // Get top customers by lifetime value
+      const topCustomers = await CustomerAnalytics.find()
+        .sort({ lifetimeValue: -1 })
+        .limit(10)
+        .populate('userId', 'name email')
+        .select('userId totalOrders totalSpent lifetimeValue customerSegment');
+
+      return {
+        totalCustomers,
+        newCustomers,
+        segments: customerSegments,
+        topCustomers
+      };
+    } catch (error) {
+      console.error('Error getting customer analytics:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Get revenue by category
+   */
+  async getRevenueByCategory() {
+    try {
+      const revenueByCategory = await Order.aggregate([
+        {
+          $match: { paymentStatus: 'success' }
+        },
+        { $unwind: '$products' },
+        {
+          $lookup: {
+            from: 'products',
+            localField: 'products.productId',
+            foreignField: '_id',
+            as: 'productDetails'
+          }
+        },
+        { $unwind: '$productDetails' },
+        {
+          $group: {
+            _id: '$productDetails.category',
+            totalRevenue: { 
+              $sum: { $multiply: ['$products.price', '$products.quantity'] } 
+            },
+            totalProductsSold: { $sum: '$products.quantity' },
+            orderCount: { $sum: 1 }
+          }
+        },
+        {
+          $project: {
+            category: '$_id',
+            totalRevenue: 1,
+            totalProductsSold: 1,
+            orderCount: 1,
+            averageOrderValue: { $divide: ['$totalRevenue', '$orderCount'] }
+          }
+        },
+        { $sort: { totalRevenue: -1 } }
+      ]);
+
+      return revenueByCategory;
+    } catch (error) {
+      console.error('Error getting revenue by category:', error);
+      throw error;
+    }
+  }
+}
+
+module.exports = new AnalyticsService();   emailservice.sj:const nodemailer = require('nodemailer');
+
+// Create transporter
+const transporter = nodemailer.createTransport({
+  host: process.env.EMAIL_HOST,
+  port: process.env.EMAIL_PORT,
+  secure: false, // true for 465, false for other ports
+  auth: {
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
+  },
+});
+
+/**
+ * Send verification email to user
+ * @param {string} email - User's email
+ * @param {string} token - Verification token
+ */
+exports.sendVerificationEmail = async (email, token) => {
+  try {
+    const verificationUrl = `${process.env.BASE_URL}/api/auth/verify/${token}`;
+    
+    const mailOptions = {
+      from: `"E-Commerce Store" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Verify Your Email Address',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>Welcome to Our E-Commerce Store! 🛍️</h2>
+          <p>Thank you for registering. Please verify your email address to complete your registration.</p>
+          
+          <div style="background-color: #f4f4f4; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
+            <p style="margin: 0; font-size: 16px; color: #555;">Your Verification Code:</p>
+            <h1 style="margin: 10px 0; font-size: 32px; letter-spacing: 5px; color: #333;">${token}</h1>
+          </div>
+
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${verificationUrl}" 
+               style="background-color: #4CAF50; color: white; padding: 12px 24px; 
+                      text-decoration: none; border-radius: 5px; font-weight: bold;">
+              Verify via Link (Optional)
+            </a>
+          </div>
+          <p>Or copy and paste this link in your browser:</p>
+          <p style="color: #666; font-size: 12px; word-break: break-all;">${verificationUrl}</p>
+          <p>This code/link will expire in 24 hours.</p>
+          <hr>
+          <p style="font-size: 12px; color: #999;">
+            If you didn't create an account, please ignore this email.
+          </p>
+        </div>
+      `,
+    };
+
+    const info = await transporter.sendMail(mailOptions);
+    console.log('Verification email sent: %s', info.messageId);
+    return true;
+  } catch (error) {
+    console.error('Error sending verification email:', error);
+    throw new Error('Failed to send verification email');
+  }
+};
+
+/**
+ * Send order confirmation email
+ * @param {string} email - User's email
+ * @param {Object} order - Order details
+ */
+exports.sendOrderConfirmation = async (email, order) => {
+  try {
+    const mailOptions = {
+      from: `"E-Commerce Store" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: `Order Confirmation - #${order._id}`,
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>🎉 Order Confirmed!</h2>
+          <p>Thank you for your purchase. Your order has been successfully placed.</p>
+          
+          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <h3>Order Details</h3>
+            <p><strong>Order ID:</strong> ${order._id}</p>
+            <p><strong>Order Date:</strong> ${new Date(order.createdAt).toLocaleDateString()}</p>
+            <p><strong>Total Amount:</strong> $${order.totalAmount.toFixed(2)}</p>
+            <p><strong>Status:</strong> ${order.orderStatus}</p>
+          </div>
+          
+          <p>You can track your order from your account dashboard.</p>
+          <p>If you have any questions, contact our support team.</p>
+          
+          <hr>
+          <p style="font-size: 12px; color: #999;">
+            This is an automated message, please do not reply to this email.
+          </p>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Order confirmation email sent to:', email);
+  } catch (error) {
+    console.error('Error sending order confirmation:', error);
+  }
+};
+
+/**
+ * Send notification email for feedback reply
+ * @param {string} email - User's email
+ * @param {Object} feedback - Feedback details
+ */
+exports.sendFeedbackNotification = async (email, feedback) => {
+  try {
+    const mailOptions = {
+      from: `"E-Commerce Store" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Response to Your Feedback',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>📝 Response to Your Feedback</h2>
+          <p>An admin has responded to your feedback:</p>
+          
+          <div style="background-color: #f0f8ff; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <p><strong>Your Feedback:</strong> ${feedback.comment}</p>
+            <p><strong>Admin Response:</strong> ${feedback.adminReply}</p>
+          </div>
+          
+          <p>Thank you for helping us improve our service!</p>
+          
+          <hr>
+          <p style="font-size: 12px; color: #999;">
+            This is an automated notification from our feedback system.
+          </p>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Feedback notification email sent to:', email);
+  } catch (error) {
+    console.error('Error sending feedback notification:', error);
+  }
+};
+
+/**
+ * Send password reset email
+ * @param {string} email - User's email
+ * @param {string} resetToken - Password reset token
+ */
+exports.sendPasswordResetEmail = async (email, resetToken) => {
+  try {
+    const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
+    
+    const mailOptions = {
+      from: `"E-Commerce Store" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Password Reset Request',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>🔐 Password Reset</h2>
+          <p>You requested to reset your password. Click the button below to create a new password:</p>
+          
+          <div style="text-align: center; margin: 30px 0;">
+            <a href="${resetUrl}" 
+               style="background-color: #007bff; color: white; padding: 12px 24px; 
+                      text-decoration: none; border-radius: 5px; font-weight: bold;">
+              Reset Password
+            </a>
+          </div>
+          
+          <p>Or use this link: ${resetUrl}</p>
+          <p>This link will expire in 1 hour.</p>
+          
+          <p style="font-size: 12px; color: #999;">
+            If you didn't request a password reset, please ignore this email.
+          </p>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    console.log('Password reset email sent to:', email);
+  } catch (error) {
+    console.error('Error sending password reset email:', error);
+  }
+};  paymentservice.js:const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const axios = require('axios');
+const crypto = require('crypto');
+
+/**
+ * Payment Service - Supports Stripe (International) and EasyPaisa (Pakistan)
+ */
+
+/********************* STRIPE IMPLEMENTATION (International) *********************/
+
+/**
+ * Process payment using Stripe
+ * @param {Object} paymentData - Payment details
+ * @returns {Object} Payment result
+ */
+exports.processStripePayment = async (paymentData) => {
+  try {
+    const { amount, orderId, customerEmail, currency = 'usd', customerName, customerAddress } = paymentData;
+    
+    // Convert amount to cents
+    const amountInCents = Math.round(amount * 100);
+    
+    // Create Stripe customer (optional)
+    let customerId;
+    if (customerEmail) {
+      const customer = await stripe.customers.create({
+        email: customerEmail,
+        name: customerName,
+        address: customerAddress,
+        metadata: {
+          orderId: orderId.toString(),
+        },
+      });
+      customerId = customer.id;
+    }
+
+    // Create checkout session — Stripe allows only one of customer or customer_email
+    const sessionConfig = {
+      payment_method_types: ['card'],
+      line_items: [{
+        price_data: {
+          currency: currency.toLowerCase(),
+          product_data: {
+            name: `Order #${orderId}`,
+            description: 'E-commerce purchase',
+          },
+          unit_amount: amountInCents,
+        },
+        quantity: 1,
+      }],
+      mode: 'payment',
+      success_url: `${process.env.FRONTEND_URL}/payment-success?session_id={CHECKOUT_SESSION_ID}&orderId=${orderId}`,
+      cancel_url: `${process.env.FRONTEND_URL}/payment-cancel?status=cancel&orderId=${orderId}`,
+      metadata: {
+        orderId: orderId.toString(),
+        customerEmail: customerEmail || '',
+        customerName: customerName || '',
+      },
+      shipping_address_collection: {
+        allowed_countries: ['US', 'CA', 'GB', 'AU', 'AE', 'SA', 'PK'],
+      },
+    };
+
+    if (customerId) {
+      sessionConfig.customer = customerId;
+    } else if (customerEmail) {
+      sessionConfig.customer_email = customerEmail;
+    }
+
+    const session = await stripe.checkout.sessions.create(sessionConfig);
+
+    return {
+      success: true,
+      gateway: 'stripe',
+      paymentId: session.id,
+      sessionId: session.id,
+      amount: amount,
+      currency: currency,
+      paymentUrl: session.url,
+      customerId: customerId,
+      expiresAt: new Date(session.expires_at * 1000),
+    };
+  } catch (error) {
+    console.error('Stripe payment error:', error.message);
+    throw new Error(`Stripe payment failed: ${error.message}`);
+  }
+};
+
+/**
+ * Verify Stripe payment
+ * @param {string} sessionId - Stripe session ID
+ * @returns {Object} Verification result
+ */
+exports.verifyStripePayment = async (sessionId) => {
+  try {
+    const session = await stripe.checkout.sessions.retrieve(sessionId, {
+      expand: ['payment_intent'],
+    });
+
+    const paymentIntent = session.payment_intent;
+    
+    return {
+      success: session.payment_status === 'paid',
+      gateway: 'stripe',
+      sessionId: session.id,
+      paymentStatus: session.payment_status,
+      paymentIntentId: paymentIntent?.id,
+      paymentMethod: paymentIntent?.payment_method_types?.[0],
+      customerEmail: session.customer_details?.email,
+      amount: session.amount_total / 100,
+      currency: session.currency,
+      metadata: session.metadata,
+      timestamp: new Date(session.created * 1000),
+    };
+  } catch (error) {
+    console.error('Stripe verification error:', error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+};
+
+/********************* EASYPAISA IMPLEMENTATION (Pakistan) *********************/
+
+/**
+ * Initialize EasyPaisa payment
+ * @param {Object} paymentData - Payment details
+ * @returns {Object} Payment initiation result
+ */
+exports.initiateEasyPaisaPayment = async (paymentData) => {
+  try {
+    const { 
+      amount, 
+      orderId, 
+      customerName, 
+      customerEmail, 
+      customerPhone,
+      description = 'E-commerce Purchase'
+    } = paymentData;
+
+    // EasyPaisa API credentials from environment
+    const storeId = process.env.EASYPAISA_STORE_ID;
+    const hashKey = process.env.EASYPAISA_HASH_KEY;
+    const merchantId = process.env.EASYPAISA_MERCHANT_ID;
+
+    // Generate transaction ID
+    const transactionId = `EP${Date.now()}${Math.random().toString(36).substr(2, 6).toUpperCase()}`;
+    
+    // Create payload for EasyPaisa
+    const payload = {
+      storeId: storeId,
+      orderId: orderId.toString(),
+      transactionAmount: amount.toString(),
+      transactionId: transactionId,
+      mobileAccountNo: customerPhone.replace(/\D/g, ''), // Remove non-digits
+      emailAddress: customerEmail,
+      customerName: customerName,
+      transactionType: 'MA',
+      tokenExpiry: new Date(Date.now() + 30 * 60000).toISOString(), // 30 minutes expiry
+      bankIdentificationNumber: '',
+      productDescription: description,
+      postBackURL: `${process.env.BASE_URL}/api/payments/easypaisa-callback`,
+      redirectURL: `${process.env.FRONTEND_URL}/payment-success?gateway=easypaisa&transactionId=${transactionId}&orderId=${orderId}`,
+    };
+
+    // Generate hash
+    const hashString = `${storeId}${orderId}${amount}${transactionId}${customerPhone}${hashKey}`;
+    const hash = crypto.createHash('sha256').update(hashString).digest('hex');
+    payload.hash = hash;
+
+    // Make API call to EasyPaisa
+    const easypaisaUrl = process.env.EASYPAISA_API_URL || 'https://easypay.easypaisa.com.pk/easypay/Index.jsf';
+    
+    // For EasyPaisa, we typically redirect to their payment page
+    // Store transaction details in database
+    const paymentRequest = {
+      gateway: 'easypaisa',
+      transactionId: transactionId,
+      orderId: orderId,
+      amount: amount,
+      customerName: customerName,
+      customerEmail: customerEmail,
+      customerPhone: customerPhone,
+      status: 'initiated',
+      initiatedAt: new Date(),
+      payload: payload,
+    };
+
+    // Save to database (you need to implement this)
+    // await PaymentTransaction.create(paymentRequest);
+
+    return {
+      success: true,
+      gateway: 'easypaisa',
+      transactionId: transactionId,
+      orderId: orderId,
+      amount: amount,
+      paymentUrl: `${easypaisaUrl}?${new URLSearchParams(payload).toString()}`,
+      redirectRequired: true,
+      message: 'Redirect to EasyPaisa payment page',
+    };
+  } catch (error) {
+    console.error('EasyPaisa payment initiation error:', error);
+    throw new Error(`EasyPaisa payment failed: ${error.message}`);
+  }
+};
+
+/**
+ * Verify EasyPaisa payment callback
+ * @param {Object} callbackData - Callback data from EasyPaisa
+ * @returns {Object} Verification result
+ */
+exports.verifyEasyPaisaCallback = async (callbackData) => {
+  try {
+    const {
+      transactionId,
+      orderId,
+      amount,
+      status,
+      responseCode,
+      responseDesc,
+      dateTime,
+      hash,
+    } = callbackData;
+
+    // Verify hash
+    const storeId = process.env.EASYPAISA_STORE_ID;
+    const hashKey = process.env.EASYPAISA_HASH_KEY;
+    
+    const hashString = `${storeId}${orderId}${amount}${transactionId}${status}${responseCode}${dateTime}${hashKey}`;
+    const calculatedHash = crypto.createHash('sha256').update(hashString).digest('hex');
+
+    if (calculatedHash !== hash) {
+      throw new Error('Invalid hash received from EasyPaisa');
+    }
+
+    // Map EasyPaisa status to our status
+    let paymentStatus = 'failed';
+    let isSuccess = false;
+    
+    if (status === '000' || responseCode === '0000') {
+      paymentStatus = 'paid';
+      isSuccess = true;
+    } else if (status === '001' || responseCode === '0001') {
+      paymentStatus = 'pending';
+    } else if (status === '002' || responseCode === '0002') {
+      paymentStatus = 'cancelled';
+    }
+
+    return {
+      success: isSuccess,
+      gateway: 'easypaisa',
+      transactionId: transactionId,
+      orderId: orderId,
+      amount: parseFloat(amount),
+      status: paymentStatus,
+      responseCode: responseCode,
+      responseMessage: responseDesc,
+      transactionDate: new Date(dateTime),
+      isVerified: true,
+    };
+  } catch (error) {
+    console.error('EasyPaisa verification error:', error);
+    return {
+      success: false,
+      error: error.message,
+      isVerified: false,
+    };
+  }
+};
+
+/**
+ * Check EasyPaisa payment status
+ * @param {string} transactionId - Transaction ID
+ * @returns {Object} Payment status
+ */
+exports.checkEasyPaisaStatus = async (transactionId) => {
+  try {
+    // This would call EasyPaisa's status check API
+    // Since EasyPaisa doesn't have a public status API, we rely on callbacks
+    // You might need to implement database lookup
+    
+    return {
+      success: true,
+      gateway: 'easypaisa',
+      transactionId: transactionId,
+      status: 'pending', // Default status
+      message: 'Check transaction status in your EasyPaisa merchant portal',
+    };
+  } catch (error) {
+    console.error('EasyPaisa status check error:', error);
+    return {
+      success: false,
+      error: error.message,
+    };
+  }
+};
+
+/********************* UNIFIED PAYMENT PROCESSOR *********************/
+
+/**
+ * Unified payment processor - routes to appropriate gateway
+ * @param {Object} paymentData - Payment details
+ * @param {string} gateway - Payment gateway ('stripe' or 'easypaisa')
+ * @returns {Object} Payment result
+ */
+exports.processPayment = async (paymentData, gateway = 'stripe') => {
+  try {
+    let result;
+    
+    switch (gateway.toLowerCase()) {
+      case 'stripe':
+        result = await this.processStripePayment(paymentData);
+        break;
+        
+      case 'easypaisa':
+        result = await this.initiateEasyPaisaPayment(paymentData);
+        break;
+        
+      default:
+        throw new Error(`Unsupported payment gateway: ${gateway}`);
+    }
+    
+    // Log payment initiation
+    console.log(`Payment initiated via ${gateway}:`, {
+      orderId: paymentData.orderId,
+      amount: paymentData.amount,
+      transactionId: result.transactionId || result.paymentId,
+    });
+    
+    return result;
+  } catch (error) {
+    console.error(`Payment processing error for ${gateway}:`, error);
+    throw error;
+  }
+};
+
+/**
+ * Verify payment based on gateway
+ * @param {string} paymentId - Payment/Transaction ID
+ * @param {string} gateway - Payment gateway
+ * @returns {Object} Verification result
+ */
+exports.verifyPayment = async (paymentId, gateway = 'stripe', additionalData = {}) => {
+  try {
+    let result;
+    
+    switch (gateway.toLowerCase()) {
+      case 'stripe':
+        result = await this.verifyStripePayment(paymentId);
+        break;
+        
+      case 'easypaisa':
+        if (additionalData.callbackData) {
+          result = await this.verifyEasyPaisaCallback(additionalData.callbackData);
+        } else {
+          result = await this.checkEasyPaisaStatus(paymentId);
+        }
+        break;
+        
+      default:
+        throw new Error(`Unsupported payment gateway: ${gateway}`);
+    }
+    
+    return result;
+  } catch (error) {
+    console.error(`Payment verification error for ${gateway}:`, error);
+    return {
+      success: false,
+      gateway: gateway,
+      error: error.message,
+    };
+  }
+};
+
+/********************* MOCK PAYMENT FOR TESTING *********************/
+
+/**
+ * Mock payment processor for development/testing
+ */
+exports.mockProcessPayment = async (paymentData) => {
+  console.log('Mock payment processing:', paymentData);
+  
+  // Simulate API delay
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
+  return {
+    success: true,
+    gateway: 'mock',
+    paymentId: `mock_pay_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    amount: paymentData.amount,
+    currency: paymentData.currency || 'PKR',
+    paymentUrl: `${process.env.BASE_URL}/api/payments/mock-success?amount=${paymentData.amount}&orderId=${paymentData.orderId}`,
+    isMock: true,
+  };
+};
+
+/**
+ * Get payment status
+ * @param {string} paymentId - Payment ID
+ * @param {string} gateway - Payment gateway
+ * @returns {Object} Payment status
+ */
+exports.getPaymentStatus = async (paymentId, gateway = 'stripe') => {
+  try {
+    switch (gateway) {
+      case 'stripe':
+        const paymentIntent = await stripe.paymentIntents.retrieve(paymentId);
+        return {
+          gateway: 'stripe',
+          status: paymentIntent.status,
+          amount: paymentIntent.amount / 100,
+          currency: paymentIntent.currency,
+          paymentMethod: paymentIntent.payment_method_types?.[0],
+          customerId: paymentIntent.customer,
+          metadata: paymentIntent.metadata,
+          timestamp: new Date(paymentIntent.created * 1000),
+        };
+        
+      case 'easypaisa':
+        // For EasyPaisa, you'd need to check your database
+        return {
+          gateway: 'easypaisa',
+          status: 'pending_check',
+          transactionId: paymentId,
+          message: 'Check EasyPaisa merchant portal for status',
+        };
+        
+      default:
+        return {
+          gateway: gateway,
+          status: 'unknown',
+          message: 'Gateway not supported for status check',
+        };
+    }
+  } catch (error) {
+    console.error('Error fetching payment status:', error);
+    
+    // Return mock status for testing
+    return {
+      gateway: gateway,
+      status: 'completed',
+      amount: 0,
+      method: 'card',
+      isMock: true,
+      timestamp: new Date(),
+    };
+  }
+};
+
+/**
+ * Refund payment
+ * @param {string} paymentId - Payment ID to refund
+ * @param {number} amount - Amount to refund
+ * @param {string} gateway - Payment gateway
+ * @returns {Object} Refund result
+ */
+exports.refundPayment = async (paymentId, amount, gateway = 'stripe') => {
+  try {
+    switch (gateway) {
+      case 'stripe':
+        const refund = await stripe.refunds.create({
+          payment_intent: paymentId,
+          amount: Math.round(amount * 100),
+        });
+        
+        return {
+          success: true,
+          gateway: 'stripe',
+          refundId: refund.id,
+          amount: refund.amount / 100,
+          status: refund.status,
+          currency: refund.currency,
+        };
+        
+      case 'easypaisa':
+        // EasyPaisa refunds typically require manual processing
+        return {
+          success: false,
+          gateway: 'easypaisa',
+          message: 'Refunds for EasyPaisa require manual processing through merchant portal',
+        };
+        
+      default:
+        throw new Error(`Refund not supported for gateway: ${gateway}`);
+    }
+  } catch (error) {
+    console.error('Refund error:', error);
+    throw new Error(`Refund failed: ${error.message}`);
+  }
+};
+
+/********************* PAYMENT GATEWAY DETECTION *********************/
+
+/**
+ * Detect appropriate payment gateway based on country and amount
+ * @param {string} country - Customer country
+ * @param {number} amount - Payment amount
+ * @param {string} currency - Payment currency
+ * @returns {string} Recommended gateway
+ */
+exports.detectPaymentGateway = (country = 'PK', currency = 'PKR') => {
+  const countryCode = country.toUpperCase();
+  const currencyCode = currency.toUpperCase();
+  
+  // For Pakistan, recommend EasyPaisa for PKR payments
+  if (countryCode === 'PK' && currencyCode === 'PKR') {
+    return 'easypaisa';
+  }
+  
+  // For international, use Stripe
+  if (['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'AED'].includes(currencyCode)) {
+    return 'stripe';
+  }
+  
+  // Default to Stripe for other cases
+  return 'stripe';
+};
+
+/**
+ * Get available payment methods for a country
+ * @param {string} country - Country code
+ * @returns {Array} Available payment methods
+ */
+exports.getAvailablePaymentMethods = (country = 'PK') => {
+  const countryCode = country.toUpperCase();
+  
+  const methods = {
+    PK: [
+      { id: 'easypaisa', name: 'EasyPaisa', type: 'wallet', icon: '💳' },
+      { id: 'jazzcash', name: 'JazzCash', type: 'wallet', icon: '📱' },
+      { id: 'bank_transfer', name: 'Bank Transfer', type: 'bank', icon: '🏦' },
+      { id: 'cod', name: 'Cash on Delivery', type: 'cod', icon: '💵' },
+    ],
+    US: [
+      { id: 'stripe_card', name: 'Credit/Debit Card', type: 'card', icon: '💳' },
+      { id: 'paypal', name: 'PayPal', type: 'wallet', icon: '🔗' },
+      { id: 'apple_pay', name: 'Apple Pay', type: 'wallet', icon: '🍎' },
+    ],
+    default: [
+      { id: 'stripe_card', name: 'Credit/Debit Card', type: 'card', icon: '💳' },
+      { id: 'paypal', name: 'PayPal', type: 'wallet', icon: '🔗' },
+    ],
+  };
+  
+  return methods[countryCode] || methods.default;
+};
+/**
+ * Save payment record to database
+ * @param {Object} paymentData - Payment data
+ * @returns {Object} Saved payment record
+ */
+exports.savePaymentRecord = async (paymentData) => {
+  try {
+    // Import Payment model if needed
+    // const Payment = require('../models/Payment');
+    
+    // Create payment record
+    const paymentRecord = {
+      userId: paymentData.userId,
+      orderId: paymentData.orderId,
+      gateway: paymentData.gateway,
+      transactionId: paymentData.transactionId || paymentData.paymentId,
+      amount: paymentData.amount,
+      currency: paymentData.currency,
+      status: 'initiated',
+      paymentDetails: paymentData,
+      createdAt: new Date(),
+    };
+    
+    // Save to database
+    // const savedPayment = await Payment.create(paymentRecord);
+    // return savedPayment;
+    
+    return paymentRecord; // For now, return the record
+  } catch (error) {
+    console.error('Error saving payment record:', error);
+    throw error;
+  }
+};
+
+/**
+ * Update payment status
+ * @param {string} transactionId - Transaction ID
+ * @param {string} status - New status
+ * @param {Object} updateData - Additional update data
+ * @returns {Object} Updated payment
+ */
+exports.updatePaymentStatus = async (transactionId, status, updateData = {}) => {
+  try {
+    // Import Payment model if needed
+    // const Payment = require('../models/Payment');
+    
+    const update = {
+      status: status,
+      updatedAt: new Date(),
+      ...updateData,
+    };
+    
+    // Update in database
+    // const updatedPayment = await Payment.findOneAndUpdate(
+    //   { transactionId: transactionId },
+    //   update,
+    //   { new: true }
+    // );
+    
+    // return updatedPayment;
+    
+    return { transactionId, status, ...update }; // For now, return mock
+  } catch (error) {
+    console.error('Error updating payment status:', error);
+    throw error;
+  }
+};? index.js:const dotenv = require('dotenv');
+dotenv.config();
+const express = require('express');
+const app = express();
+const cors = require('cors');
+const analyticsRoutes = require('./routes/analyticsRoutes');
+const feedbackRoutes = require('./routes/feedbackeRoute');
+const notificationRoutes = require('./routes/notificationRoutes');
+const paymentRoutes = require('./routes/paymentRoutes');
+const ordersRoutes = require('./routes/ordersRoute');
+const authRoutes = require('./routes/authRoutes');
+const productRoutes = require('./routes/productRoutes');
+
+const connectDB = require('./config/database');
+require('./config/passport'); // Import passport config
+require('./cron/analyticsCron'); // Start analytics cron jobs
+connectDB()
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Home route
+app.get('/', (req, res) => {
+  res.json({ message: 'E-commerce API is running' });
+});
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/auth', authRoutes); // Support existing Google Callback URL schema
+app.use('/api/products', productRoutes);
+app.use('/api/orders', ordersRoutes);
+app.use('/api/payments', paymentRoutes);
+app.use('/api/feedback', feedbackRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/analytics', analyticsRoutes);
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
+?
+
+
+
+
+
+
+
+
+
+
+
+
+
