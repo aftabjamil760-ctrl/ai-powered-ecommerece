@@ -1,16 +1,17 @@
+
 const express = require('express');
 const router = express.Router();
 const analyticsController = require('../controllers/analyticsController');
 const { protect } = require('../middleware/authMiddleware');
 const adminAuth = require('../middleware/adminAuthMiddleware');
 
-// All routes require admin authentication
+// Secure all analytics endpoints - strictly require Admin Authentication
 router.use(protect);
 router.use(adminAuth);
 
 /**
  * @route   GET /api/analytics/sales-overview
- * @desc    Get sales overview
+ * @desc    Get sales overview (today, week, month, year)
  * @access  Private (Admin)
  */
 router.get('/sales-overview', analyticsController.getSalesOverview);
@@ -31,7 +32,7 @@ router.get('/top-products', analyticsController.getTopProducts);
 
 /**
  * @route   GET /api/analytics/customers
- * @desc    Get customer analytics
+ * @desc    Get customer analytics & segments
  * @access  Private (Admin)
  */
 router.get('/customers', analyticsController.getCustomerAnalytics);
@@ -45,21 +46,14 @@ router.get('/revenue-by-category', analyticsController.getRevenueByCategory);
 
 /**
  * @route   GET /api/analytics/dashboard
- * @desc    Get dashboard statistics
+ * @desc    Get complete dashboard statistics in parallel
  * @access  Private (Admin)
  */
 router.get('/dashboard', analyticsController.getDashboardStats);
 
 /**
- * @route   POST /api/analytics/update-daily
- * @desc    Update analytics manually
- * @access  Private (Admin)
- */
-router.post('/update-daily', analyticsController.updateDailyAnalytics);
-
-/**
  * @route   GET /api/analytics/export
- * @desc    Export analytics data
+ * @desc    Export data in pure JSON format
  * @access  Private (Admin)
  */
 router.get('/export', analyticsController.exportAnalytics);

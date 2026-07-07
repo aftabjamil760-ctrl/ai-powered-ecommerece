@@ -8,7 +8,7 @@ const userSchema = new mongoose.Schema({
   isVerified: { type: Boolean, default: false },
   verificationToken: String,
   wishlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
-  role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  role: { type: String, enum: ['customer', 'admin'], default: 'customer' },
   createdAt: { type: Date, default: Date.now }
 });
 

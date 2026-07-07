@@ -1,11 +1,15 @@
+
+// seedProducts();
 const dotenv = require('dotenv');
 dotenv.config();
 const connectDB = require('../config/database');
 const Product = require('../models/Product');
 const vectorStore = require('../chatbot/utils/vectorStore');
+const mongoose = require('mongoose');
 
 async function seedProducts() {
   try {
+    // Establish connections across database and vector subsystems
     await connectDB();
     await vectorStore.initialize();
 
@@ -49,24 +53,40 @@ async function seedProducts() {
     ];
 
     for (const productData of products) {
-      // Check if product exists
+      // Check if product exists to prevent validation collisions
       const existing = await Product.findOne({ name: productData.name });
+      
       if (existing) {
-        console.log(`Product "${productData.name}" already exists, updating...`);
+        console.log(`Product "${productData.name}" already exists, re-syncing configurations...`);
+        
+        // Update regular database entry
         await Product.updateOne({ _id: existing._id }, productData);
-        await vectorStore.updateProduct(existing);
+        
+        // Re-fetch product metadata to get combined mongoose parameters safely
+        const updatedProduct = await Product.findById(existing._id);
+        
+        // FIX: vectorStore uses indexProduct which implements updateOne/upsert natively
+        await vectorStore.indexProduct(updatedProduct);
       } else {
         const product = new Product(productData);
         await product.save();
+        
+        // Pipeline vector sync for semantic search layers
         await vectorStore.indexProduct(product);
-        console.log(`Added product: ${productData.name}`);
+        console.log(`➕ Added product: ${productData.name}`);
       }
     }
 
-    console.log('✅ Products seeded successfully!');
+    console.log('✅ Base inventory seed and vector sync finalized successfully!');
+    await mongoose.connection.close();
     process.exit(0);
   } catch (error) {
-    console.error('Error seeding products:', error);
+    console.error('❌ Error executing standalone seed execution sequence:', error);
+    try {
+      await mongoose.connection.close();
+    } catch (closeError) {
+      console.error('Failed to close mongoose session pool safely:', closeError);
+    }
     process.exit(1);
   }
 }

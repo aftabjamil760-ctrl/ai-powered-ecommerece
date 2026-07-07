@@ -13,9 +13,9 @@ const productEmbeddingSchema = new mongoose.Schema({
     required: true,
     validate: {
       validator: function(v) {
-        return Array.isArray(v) && v.length === 384;
+        return Array.isArray(v) && v.length > 0;
       },
-      message: 'Embedding must be an array of 384 numbers'
+      message: 'Embedding must be a non-empty array of numbers'
     }
   },
   text: {

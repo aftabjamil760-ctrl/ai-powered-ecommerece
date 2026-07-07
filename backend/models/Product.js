@@ -17,6 +17,8 @@ const productSchema = new mongoose.Schema({
     rating: Number,
     review: String
   }],
+  ratingCount: { type: Number, default: 0 },
+  ratingAverage: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
 });
 

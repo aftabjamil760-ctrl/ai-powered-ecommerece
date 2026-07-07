@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
     LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
     AreaChart, Area, PieChart, Pie, Cell, Legend, BarChart, Bar
@@ -6,10 +7,23 @@ import {
 import analyticsService from '../utils/analyticsService';
 
 const Analytics = () => {
+    const navigate = useNavigate();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [timeRange, setTimeRange] = useState('7days');
+    const [isAdmin, setIsAdmin] = useState(false);
+
+    useEffect(() => {
+        const storedUser = localStorage.getItem('user');
+        const parsedUser = storedUser ? JSON.parse(storedUser) : null;
+
+        if (!parsedUser || parsedUser.role !== 'admin') {
+            navigate('/');
+        } else {
+            setIsAdmin(true);
+        }
+    }, [navigate]);
 
     const fetchData = async () => {
         setLoading(true);
@@ -24,8 +38,10 @@ const Analytics = () => {
     };
 
     useEffect(() => {
-        fetchData();
-    }, []);
+        if (isAdmin) {
+            fetchData();
+        }
+    }, [isAdmin]);
 
     if (loading) return (
         <div className="flex items-center justify-center min-h-screen bg-gray-900">

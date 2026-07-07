@@ -6,13 +6,17 @@ const ChatBot = () => {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [recommendations, setRecommendations] = useState([]);
+  const [userRole, setUserRole] = useState('customer');
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
-    // Load recommendations
+    const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+    if (storedUser?.role) {
+      setUserRole(storedUser.role);
+    }
+
     loadRecommendations();
-    // Load chat history if session exists
-    loadHistory();
+    loadHistory(storedUser?.role || 'customer');
   }, []);
 
   useEffect(() => {
@@ -23,9 +27,9 @@ const ChatBot = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const loadHistory = async () => {
+  const loadHistory = async (role = 'customer') => {
     try {
-      const history = await chatbotService.getHistory();
+      const history = await chatbotService.getHistory(null, role);
       if (history.length > 0) {
         setMessages(history.map(msg => ({
           id: msg._id,
@@ -62,8 +66,10 @@ const ChatBot = () => {
     setInput('');
     setIsLoading(true);
 
+    const endpoint = userRole === 'admin' ? '/chatbot/message/admin' : '/chatbot/message/customer';
+
     try {
-      const response = await chatbotService.sendMessage(input);
+      const response = await chatbotService.sendMessage(input, endpoint, userRole);
       
       const botMessage = {
         id: Date.now() + 1,
@@ -72,12 +78,14 @@ const ChatBot = () => {
         timestamp: new Date(),
         intent: response.intent,
         orderStatus: response.orderStatus,
-        recommendations: response.recommendations
+        recommendations: response.recommendations,
+        productMeta: response.productMeta,
+        products: response.products,
+        orders: response.orders
       };
 
       setMessages(prev => [...prev, botMessage]);
 
-      // Update recommendations if provided
       if (response.recommendations?.length > 0) {
         setRecommendations(response.recommendations);
       }
@@ -111,7 +119,14 @@ const ChatBot = () => {
   return (
     <div className="chatbot-container">
       <div className="chatbot-header">
-        <h3>🤖 AI Assistant</h3>
+        <div>
+          <h3>{userRole === 'admin' ? '🧠 Admin AI Assistant' : '🤖 Shopping Assistant'}</h3>
+          <p className="chatbot-role-note">
+            {userRole === 'admin'
+              ? 'Ask about sales, inventory, feedback, and store analytics.'
+              : 'Ask about products, orders, recommendations, or search help.'}
+          </p>
+        </div>
         <span className="status-badge">Online</span>
       </div>
 
@@ -164,6 +179,46 @@ const ChatBot = () => {
                   )}
                 </div>
               )}
+              {msg.orders && msg.orders.length > 0 && (
+                <div className="order-history">
+                  <h4>📋 Your Order History ({msg.orders.length})</h4>
+                  <div className="orders-list">
+                    {msg.orders.map((order, idx) => {
+                      const statusColors = {
+                        pending: '#fbbf24',
+                        success: '#10b981',
+                        failed: '#ef4444',
+                        processing: '#3b82f6',
+                        shipped: '#a855f7',
+                        delivered: '#10b981',
+                        cancelled: '#9ca3af'
+                      };
+                      const paymentBadgeColor = statusColors[order.paymentStatus] || '#6b7280';
+                      const orderBadgeColor = statusColors[order.orderStatus] || '#6b7280';
+                      
+                      return (
+                        <div key={idx} className="order-item">
+                          <div className="order-header">
+                            <span className="order-id">Order #{order._id.substring(0, 8)}...</span>
+                            <span className="order-date">{new Date(order.createdAt).toLocaleDateString()}</span>
+                          </div>
+                          <div className="order-badges">
+                            <span className="badge" style={{backgroundColor: paymentBadgeColor + '20', color: paymentBadgeColor}}>
+                              💳 {order.paymentStatus.toUpperCase()}
+                            </span>
+                            <span className="badge" style={{backgroundColor: orderBadgeColor + '20', color: orderBadgeColor}}>
+                              📦 {order.orderStatus.toUpperCase()}
+                            </span>
+                          </div>
+                          <div className="order-amount">
+                            Total: <strong>${order.totalAmount.toFixed(2)}</strong>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {msg.recommendations && msg.recommendations.length > 0 && (
                 <div className="recommendations">
                   <p>💡 You might also like:</p>
@@ -174,6 +229,61 @@ const ChatBot = () => {
                   ))}
                 </div>
               )}
+              {(msg.productMeta || (msg.products && msg.products.length > 0)) && (() => {
+                const product = msg.productMeta || msg.products[0];
+                const imageUrl = product.image || null;
+                const pageUrl = product.pageUrl || null;
+
+                return (
+                  <div className="product-card">
+                    {imageUrl && (
+                      <div className="product-image-wrapper">
+                        <img
+                          src={imageUrl}
+                          alt={product.name}
+                          className="product-image"
+                        />
+                      </div>
+                    )}
+                    <div className="product-details">
+                      <h4>{product.name}</h4>
+                      <p className="product-category">{product.category}</p>
+                      <p className="product-price">${product.discountedPrice ?? product.price}</p>
+                      {product.discount > 0 && (
+                        <p className="product-discount">{product.discount}% off</p>
+                      )}
+                      {product.stock !== null && product.stock !== undefined && (
+                        <p className="product-stock">Stock available: {product.stock}</p>
+                      )}
+                      {product.description && (
+                        <p className="product-description">{product.description}</p>
+                      )}
+                      <div className="product-action-row">
+                        {pageUrl && (
+                          <a
+                            href={pageUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="product-btn"
+                          >
+                            View product page
+                          </a>
+                        )}
+                        {imageUrl && (
+                          <a
+                            href={imageUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="product-btn product-btn-secondary"
+                          >
+                            View image
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
               <span className="timestamp">{formatTime(msg.timestamp)}</span>
             </div>
           </div>
@@ -200,7 +310,9 @@ const ChatBot = () => {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyPress={handleKeyPress}
-          placeholder="Type your message..."
+          placeholder={userRole === 'admin'
+            ? 'Ask sales, inventory, or feedback analytics questions...'
+            : 'Find products, track orders, or ask for recommendations...'}
           rows={2}
           disabled={isLoading}
         />
@@ -237,6 +349,12 @@ const ChatBot = () => {
         .chatbot-header h3 {
           margin: 0;
           font-weight: 600;
+        }
+
+        .chatbot-role-note {
+          margin: 4px 0 0;
+          font-size: 13px;
+          color: rgba(255,255,255,0.85);
         }
 
         .status-badge {
@@ -373,6 +491,95 @@ const ChatBot = () => {
           cursor: pointer;
           margin: 2px 4px;
           transition: all 0.2s;
+        }
+
+        .product-card {
+          display: flex;
+          gap: 12px;
+          margin-top: 12px;
+          padding: 14px;
+          border-radius: 12px;
+          background: #f5f7ff;
+          border: 1px solid #dbe4ff;
+        }
+
+        .product-image-wrapper {
+          width: 120px;
+          min-width: 120px;
+          overflow: hidden;
+          border-radius: 12px;
+          background: #fff;
+          border: 1px solid #e2e8f0;
+        }
+
+        .product-image {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .product-details {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .product-details h4 {
+          margin: 0;
+          font-size: 15px;
+          font-weight: 700;
+        }
+
+        .product-category,
+        .product-description,
+        .product-stock,
+        .product-discount,
+        .product-price {
+          margin: 0;
+          font-size: 13px;
+          line-height: 1.4;
+          color: #374151;
+        }
+
+        .product-price {
+          font-size: 14px;
+          font-weight: 700;
+          color: #111827;
+        }
+
+        .product-action-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 8px;
+        }
+
+        .product-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 8px 12px;
+          border-radius: 9999px;
+          background: #3b82f6;
+          color: white;
+          text-decoration: none;
+          font-size: 13px;
+          transition: background 0.2s;
+        }
+
+        .product-btn:hover {
+          background: #2563eb;
+        }
+
+        .product-btn-secondary {
+          background: #eef2ff;
+          color: #4338ca;
+        }
+
+        .product-btn-secondary:hover {
+          background: #e0e7ff;
         }
 
         .rec-btn:hover {

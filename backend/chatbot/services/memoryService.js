@@ -1,3 +1,5 @@
+
+const crypto = require('crypto');
 const ChatSession = require('../models/ChatSession');
 const ChatMessage = require('../models/ChatMessage');
 
@@ -5,65 +7,83 @@ class MemoryService {
   /**
    * Create or get chat session
    */
-  async getOrCreateSession(userId, sessionId = null) {
+  getOrCreateSession = async (userId, sessionId = null) => {
     try {
       if (sessionId) {
-        // Try to find existing session
-        let session = await ChatSession.findOne({ 
-          sessionId,
-          userId,
-          active: true
-        });
+        let session = await ChatSession.findOne({ sessionId });
 
         if (session) {
-          // Update last activity
           session.lastActivity = new Date();
+          session.active = true;
+          if (!session.userId) session.userId = userId;
           await session.save();
           return session;
         }
       }
 
-      // Create new session
-      const newSession = new ChatSession({
-        userId,
-        sessionId: sessionId || this.generateSessionId(),
-        lastActivity: new Date()
-      });
+      let created = null;
+      let attempts = 0;
+      while (!created && attempts < 3) {
+        attempts += 1;
+        const newSession = new ChatSession({
+          userId,
+          sessionId: sessionId || this.generateSessionId(),
+          lastActivity: new Date()
+        });
 
-      await newSession.save();
-      return newSession;
+        try {
+          created = await newSession.save();
+        } catch (error) {
+          if (error.code === 11000 && error.keyPattern?.sessionId && !sessionId) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (!created) {
+        throw new Error('Unable to create a unique chat session.');
+      }
+
+      return created;
     } catch (error) {
       console.error('Error getting/creating session:', error);
       throw error;
     }
-  }
+  };
 
   /**
-   * Generate unique session ID
+   * Generate unique session ID token
    */
-  generateSessionId() {
-    return `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-  }
+  generateSessionId = () => {
+    return `session_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+  };
 
   /**
-   * Save message to memory
+   * Save message to memory with explicit intent guard rails
    */
-  async saveMessage(sessionId, userId, role, content, intent = null, entities = null, metadata = null) {
+  saveMessage = async (sessionId, userId, role, content, intent = null, entities = null, metadata = null) => {
     try {
+      const validIntents = [
+        'general', 'order_tracking', 'order_history', 'order_stats', 
+        'product_search', 'recommendation', 'support', 'feedback', 
+        'greeting', 'unknown'
+      ];
+      const safeIntent = intent && validIntents.includes(intent) ? intent : 'general';
+
       const message = new ChatMessage({
         sessionId,
         userId,
         role,
         content,
-        intent: intent || 'general',
+        intent: safeIntent,
         entities: entities || {},
         metadata: metadata || {},
         vectorized: false
       });
-
       await message.save();
 
-      // Update session's last activity
+      // Update session metrics parameters atomically
       await ChatSession.findOneAndUpdate(
         { sessionId },
         { 
@@ -71,131 +91,118 @@ class MemoryService {
           $inc: { messageCount: 1 }
         }
       );
-
       return message;
     } catch (error) {
-      console.error('Error saving message:', error);
-      throw error;
+      console.error('Critical execution fault saving runtime dialogue packet:', error);
+      return null;
     }
-  }
+  };
 
   /**
-   * Get chat history
+   * Get historical chat tracking arrays
    */
-  async getChatHistory(sessionId, limit = 20) {
+  getChatHistory = async (sessionId, limit = 20) => {
     try {
       const messages = await ChatMessage.find({ sessionId })
         .sort({ createdAt: -1 })
         .limit(limit)
         .lean();
-
       return messages.reverse();
     } catch (error) {
-      console.error('Error getting chat history:', error);
+      console.error('Error getting chat history array:', error);
       return [];
     }
-  }
+  };
 
   /**
-   * Get recent messages for context
+   * Get recent messages trimmed slice maps for local LLM injection
    */
-  async getRecentMessages(sessionId, limit = 10) {
+  getRecentMessages = async (sessionId, limit = 10) => {
     try {
       const messages = await ChatMessage.find({ sessionId })
         .sort({ createdAt: -1 })
         .limit(limit)
         .select('role content createdAt')
         .lean();
-
       return messages.reverse();
     } catch (error) {
-      console.error('Error getting recent messages:', error);
+      console.error('Error compiling recent contextual sequences maps:', error);
       return [];
     }
-  }
+  };
 
   /**
-   * Summarize conversation
+   * Summarize conversation based on lexical distribution tracking
    */
-  async summarizeConversation(sessionId) {
+  summarizeConversation = async (sessionId) => {
     try {
       const messages = await this.getChatHistory(sessionId, 30);
+      if (messages.length === 0) return '';
       
-      if (messages.length === 0) {
-        return '';
-      }
-
-      // Extract key topics
       const topics = [];
+      const stopWords = ['please', 'thank', 'would', 'could', 'should', 'about', 'there'];
+      
       for (const msg of messages) {
         if (msg.role === 'user') {
-          // Simple topic extraction (could use AI for better summarization)
-          const words = msg.content.toLowerCase().split(' ');
+          const words = msg.content.toLowerCase().split(/\s+/);
           for (const word of words) {
-            if (word.length > 5 && !['please', 'thank', 'would', 'could'].includes(word)) {
-              topics.push(word);
+            const cleanWord = word.replace(/[^a-zA-Z]/g, '');
+            if (cleanWord.length > 5 && !stopWords.includes(cleanWord)) {
+              topics.push(cleanWord);
             }
           }
         }
       }
-
-      // Get unique topics
+      
       const uniqueTopics = [...new Set(topics)].slice(0, 10);
+      const generatedSummary = uniqueTopics.length > 0 
+        ? `Conversation focused on parameters: ${uniqueTopics.join(', ')}`
+        : 'General support inquiry session context';
 
-      // Update session summary
       await ChatSession.findOneAndUpdate(
         { sessionId },
         { 
-          summary: `Conversation about: ${uniqueTopics.join(', ')}`,
+          summary: generatedSummary,
           keyTopics: uniqueTopics
         }
       );
-
-      return {
-        topics: uniqueTopics,
-        summary: `Conversation about: ${uniqueTopics.join(', ')}`
-      };
+      
+      return { topics: uniqueTopics, summary: generatedSummary };
     } catch (error) {
-      console.error('Error summarizing conversation:', error);
+      console.error('Telemetry compilation warning under summarizer scope:', error);
       return { topics: [], summary: '' };
     }
-  }
+  };
 
   /**
-   * Clean up old sessions
+   * Clean up stale/inactive cold records
    */
-  async cleanupOldSessions(days = 7) {
+  cleanupOldSessions = async (days = 7) => {
     try {
       const cutoffDate = new Date();
       cutoffDate.setDate(cutoffDate.getDate() - days);
-
+      
       const result = await ChatSession.deleteMany({
         lastActivity: { $lt: cutoffDate },
         active: false
       });
-
-      console.log(`Cleaned up ${result.deletedCount} old sessions`);
+      console.log(`🧹 Memory Engine Sweep completed: purged ${result.deletedCount} defunct historical sessions.`);
       return result;
     } catch (error) {
-      console.error('Error cleaning up sessions:', error);
+      console.error('Purging runtime execution maps failed safely:', error);
       throw error;
     }
-  }
+  };
 
   /**
-   * Get session context with user preferences
+   * Fetch absolute session state mapping bundles
    */
-  async getSessionContext(sessionId) {
+  getSessionContext = async (sessionId) => {
     try {
       const session = await ChatSession.findOne({ sessionId });
+      if (!session) return {};
       
-      if (!session) {
-        return {};
-      }
-
-      // Get recent messages for context
       const recentMessages = await this.getRecentMessages(sessionId, 5);
-
       return {
         session: {
           id: session.sessionId,
@@ -207,29 +214,39 @@ class MemoryService {
         recentMessages
       };
     } catch (error) {
-      console.error('Error getting session context:', error);
+      console.error('Error fetching structural pipeline context packets:', error);
       return {};
     }
-  }
+  };
 
-  /**
-   * Update session sentiment
-   */
-  async updateSentiment(sessionId, sentiment) {
+  getLastSession = async (userId) => {
     try {
-      await ChatSession.findOneAndUpdate(
-        { sessionId },
-        { sentiment }
-      );
+      if (!userId) return null;
+      const session = await ChatSession.findOne({ userId })
+        .sort({ lastActivity: -1 })
+        .lean();
+      return session;
     } catch (error) {
-      console.error('Error updating sentiment:', error);
+      console.error('Error finding last chat session:', error);
+      return null;
     }
-  }
+  };
 
   /**
-   * End session
+   * Inject sentiment analysis updates
    */
-  async endSession(sessionId) {
+  updateSentiment = async (sessionId, sentiment) => {
+    try {
+      await ChatSession.findOneAndUpdate({ sessionId }, { sentiment });
+    } catch (error) {
+      console.error('Failed to update session telemetry sentiment vector index:', error);
+    }
+  };
+
+  /**
+   * Finalize and seal active interactive execution workflows
+   */
+  endSession = async (sessionId) => {
     try {
       await ChatSession.findOneAndUpdate(
         { sessionId },
@@ -239,47 +256,12 @@ class MemoryService {
         }
       );
       
-      // Summarize before ending
+      // Compute final analytics tracking maps seamlessly before lifecycle suspension
       await this.summarizeConversation(sessionId);
     } catch (error) {
-      console.error('Error ending session:', error);
+      console.error('Error sealing workflow pipeline lifecycle gracefully:', error);
     }
-  }
+  };
 }
 
 module.exports = new MemoryService();
-async function saveMessage(sessionId, userId, role, content, intent = null, entities = null, metadata = null) {
-  try {
-    // Ensure intent is valid
-    const validIntents = ['general', 'order_tracking', 'product_search', 'recommendation', 'support', 'feedback', 'greeting', 'unknown'];
-    const safeIntent = intent && validIntents.includes(intent) ? intent : 'general';
-
-    const message = new ChatMessage({
-      sessionId,
-      userId,
-      role,
-      content,
-      intent: safeIntent,
-      entities: entities || {},
-      metadata: metadata || {},
-      vectorized: false
-    });
-
-    await message.save();
-
-    // Update session's last activity
-    await ChatSession.findOneAndUpdate(
-      { sessionId },
-      { 
-        lastActivity: new Date(),
-        $inc: { messageCount: 1 }
-      }
-    );
-
-    return message;
-  } catch (error) {
-    console.error('Error saving message:', error);
-    // Don't throw, just log the error
-    return null;
-  }
-}

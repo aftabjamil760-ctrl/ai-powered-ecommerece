@@ -1,59 +1,48 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+// chatbot/utils/vectorStore.js
+const ollamaService = require('../services/ollamaService');
 const Product = require('../../models/Product');
 const ProductEmbedding = require('../models/ProductEmbedding');
 const mongoose = require('mongoose');
-const { createLocalEmbedding, isGeminiUnavailable } = require('./fallbackUtils');
 
 class VectorStore {
   constructor() {
-    this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    this.embeddingModel = this.genAI.getGenerativeModel({
-      model: process.env.GEMINI_EMBEDDING_MODEL || 'embedding-001'
-    });
+    this.ollamaService = ollamaService;
     this.initialized = false;
   }
 
-  async initialize() {
+  initialize = async () => {
     if (this.initialized) return;
-    
-    // Check MongoDB connection
+
     if (mongoose.connection.readyState !== 1) {
-      await mongoose.connect(process.env.MONGODB_URI);
+      throw new Error('Vector store initialization requires an active MongoDB connection');
     }
-    
+
     this.initialized = true;
-    console.log('✅ MongoDB Vector Store initialized');
-  }
+    console.log('✅ MongoDB Vector Store initialized successfully (Ollama Router Engine)');
+  };
 
   /**
-   * Generate embeddings for text
+   * Generate vectors dynamically utilizing active Ollama service layers
    */
-  async generateEmbedding(text) {
+  generateEmbedding = async (text) => {
     try {
-      const result = await this.embeddingModel.embedContent(text);
-      return result.embedding.values;
+      return await this.ollamaService.generateEmbedding(text);
     } catch (error) {
-      if (isGeminiUnavailable(error)) {
-        console.warn('Gemini embedding unavailable, using local fallback embedding');
-        return createLocalEmbedding(text);
-      }
-      console.error('Error generating embedding:', error);
+      console.error('Vector allocation exception thrown:', error);
       throw error;
     }
-  }
+  };
 
   /**
-   * Index product embedding
+   * Index or upsert product embeddings map structures
    */
-  async indexProduct(product) {
+  indexProduct = async (product) => {
     try {
       await this.initialize();
-
-      // Create text representation of product
-      const text = `${product.name} ${product.description || ''} ${product.category}`.trim();
+      const text = `${product.name} ${product.description || ''} ${product.category || ''}`.trim();
       const embedding = await this.generateEmbedding(text);
-
-      // Upsert embedding
+      
       const result = await ProductEmbedding.findOneAndUpdate(
         { productId: product._id },
         {
@@ -70,80 +59,83 @@ class VectorStore {
             description: product.description || ''
           }
         },
-        { upsert: true, new: true }
+        { upsert: true, returnDocument: 'after' }
       );
-
-      console.log(`✅ Indexed product: ${product.name}`);
+      
+      console.log(`✅ Indexed product parameters: ${product.name}`);
       return result;
     } catch (error) {
-      console.error('Error indexing product:', error);
+      console.error(`Index update runtime fault for product reference ${product?._id}:`, error);
       return null;
     }
-  }
+  };
 
   /**
-   * Index all products
+   * Index all core inventory configurations sequentially
    */
-  async indexAllProducts() {
+  indexAllProducts = async () => {
     try {
       await this.initialize();
-
       const products = await Product.find({});
       let indexed = 0;
-
+      
       for (const product of products) {
         const result = await this.indexProduct(product);
         if (result) indexed++;
       }
-
-      console.log(`✅ Indexed ${indexed}/${products.length} products`);
+      
+      console.log(`✅ Structural Index processing finalized: ${indexed}/${products.length} records processed.`);
       return indexed;
     } catch (error) {
-      console.error('Error indexing all products:', error);
+      console.error('Critical failure execution under global database indexing loop:', error);
       throw error;
     }
-  }
+  };
+
+  buildSearchFilter = (filter = {}) => {
+    const searchFilter = {};
+    if (filter.category) {
+      searchFilter.category = filter.category;
+    }
+    if (filter.minPrice != null || filter.maxPrice != null) {
+      searchFilter.price = {};
+      if (filter.minPrice != null) {
+        searchFilter.price.$gte = filter.minPrice;
+      }
+      if (filter.maxPrice != null) {
+        searchFilter.price.$lte = filter.maxPrice;
+      }
+    }
+    return searchFilter;
+  };
+
+  buildVectorSearchStage = (queryVector, limit, filter = {}) => {
+    const vectorSearchStage = {
+      $vectorSearch: {
+        index: process.env.VECTOR_INDEX_NAME || 'product_embeddings_index',
+        path: 'embedding',
+        queryVector,
+        numCandidates: Math.max(limit * 10, 10),
+        limit
+      }
+    };
+    
+    const searchFilter = this.buildSearchFilter(filter);
+    if (Object.keys(searchFilter).length > 0) {
+      vectorSearchStage.$vectorSearch.filter = searchFilter;
+    }
+    return vectorSearchStage;
+  };
 
   /**
-   * Search similar products using MongoDB Atlas Vector Search
+   * Search similar items deploying native Ollama structural vectors maps
    */
-  async searchSimilarProducts(query, limit = 5, filter = {}) {
+  searchSimilarProducts = async (query, limit = 5, filter = {}) => {
     try {
       await this.initialize();
-
-      // Generate query embedding
       const queryEmbedding = await this.generateEmbedding(query);
-
-      // Build filter
-      const searchFilter = {};
-      if (filter.category) {
-        searchFilter.category = filter.category;
-      }
-      if (filter.minPrice != null || filter.maxPrice != null) {
-        searchFilter.price = {};
-        if (filter.minPrice != null) {
-          searchFilter.price.$gte = filter.minPrice;
-        }
-        if (filter.maxPrice != null) {
-          searchFilter.price.$lte = filter.maxPrice;
-        }
-      }
-
-      const vectorSearchStage = {
-        $vectorSearch: {
-          index: process.env.VECTOR_INDEX_NAME || 'product_embeddings_index',
-          path: 'embedding',
-          queryVector: queryEmbedding,
-          numCandidates: Math.max(limit * 10, 10),
-          limit: limit
-        }
-      };
-
-      if (Object.keys(searchFilter).length > 0) {
-        vectorSearchStage.$vectorSearch.filter = searchFilter;
-      }
-
-      // Perform vector search using MongoDB Atlas
+      const vectorSearchStage = this.buildVectorSearchStage(queryEmbedding, limit, filter);
+      
       const results = await ProductEmbedding.aggregate([
         vectorSearchStage,
         {
@@ -175,84 +167,36 @@ class VectorStore {
           $sort: { similarity: -1 }
         }
       ]);
-
+      
       return results;
     } catch (error) {
-      console.error('Error searching similar products:', error);
+      console.error('Semantic pipeline search anomaly caught safely:', error);
       return [];
     }
-  }
+  };
 
   /**
-   * Delete product embedding
+   * Get relative lookalikes matching internal product references profiles
    */
-  async deleteProduct(productId) {
+  getSimilarProducts = async (productId, limit = 5) => {
     try {
       await this.initialize();
-      const result = await ProductEmbedding.deleteOne({ productId });
-      console.log(`✅ Deleted embedding for product: ${productId}`);
-      return result.deletedCount > 0;
-    } catch (error) {
-      console.error('Error deleting product embedding:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Update product embedding
-   */
-  async updateProduct(product) {
-    try {
-      await this.deleteProduct(product._id);
-      await this.indexProduct(product);
-      return true;
-    } catch (error) {
-      console.error('Error updating product embedding:', error);
-      return false;
-    }
-  }
-
-  /**
-   * Get embedding for a specific product
-   */
-  async getProductEmbedding(productId) {
-    try {
-      await this.initialize();
-      const embedding = await ProductEmbedding.findOne({ productId });
-      return embedding;
-    } catch (error) {
-      console.error('Error getting product embedding:', error);
-      return null;
-    }
-  }
-
-  /**
-   * Get similar products based on a product ID
-   */
-  async getSimilarProducts(productId, limit = 5) {
-    try {
-      await this.initialize();
-
-      // Get the product embedding
       const productEmbedding = await ProductEmbedding.findOne({ productId });
-      if (!productEmbedding) {
-        return [];
-      }
-
-      // Search for similar products
-      const results = await ProductEmbedding.aggregate([
+      if (!productEmbedding) return [];
+      
+      return await ProductEmbedding.aggregate([
         {
           $vectorSearch: {
-            index: 'product_embeddings_index',
+            index: process.env.VECTOR_INDEX_NAME || 'product_embeddings_index',
             path: 'embedding',
             queryVector: productEmbedding.embedding,
             numCandidates: limit * 10,
-            limit: limit + 1 // +1 to exclude the product itself
+            limit: limit + 1
           }
         },
         {
           $match: {
-            productId: { $ne: productId } // Exclude the original product
+            productId: { $ne: productId }
           }
         },
         {
@@ -286,13 +230,11 @@ class VectorStore {
           $limit: limit
         }
       ]);
-
-      return results;
     } catch (error) {
-      console.error('Error getting similar products:', error);
+      console.error('Failed to extract similar context vectors maps safely:', error);
       return [];
     }
-  }
+  };
 }
 
 module.exports = new VectorStore();

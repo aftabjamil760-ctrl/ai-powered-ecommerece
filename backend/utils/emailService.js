@@ -1,6 +1,7 @@
+
 const nodemailer = require('nodemailer');
 
-// Create transporter
+// Create reusable transporter object using SMTP transport
 const transporter = nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
   port: process.env.EMAIL_PORT,
@@ -12,48 +13,35 @@ const transporter = nodemailer.createTransport({
 });
 
 /**
- * Send verification email to user
+ * Send 6-Digit OTP verification email to user
  * @param {string} email - User's email
- * @param {string} token - Verification token
+ * @param {string} otp - 6-Digit OTP Code
  */
-exports.sendVerificationEmail = async (email, token) => {
+exports.sendVerificationEmail = async (email, otp) => {
   try {
-    const verificationUrl = `${process.env.BASE_URL}/api/auth/verify/${token}`;
-    
     const mailOptions = {
       from: `"E-Commerce Store" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: 'Verify Your Email Address',
       html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>Welcome to Our E-Commerce Store! 🛍️</h2>
-          <p>Thank you for registering. Please verify your email address to complete your registration.</p>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+          <h2 style="color: #333; text-align: center;">Welcome to Our Store! 🎉</h2>
+          <p>Thank you for registering. Please use the following One-Time Password (OTP) to complete your verification:</p>
           
           <div style="background-color: #f4f4f4; padding: 20px; text-align: center; border-radius: 8px; margin: 20px 0;">
-            <p style="margin: 0; font-size: 16px; color: #555;">Your Verification Code:</p>
-            <h1 style="margin: 10px 0; font-size: 32px; letter-spacing: 5px; color: #333;">${token}</h1>
+            <p style="margin: 0; font-size: 16px; color: #555;">Your Verification OTP:</p>
+            <h1 style="margin: 10px 0; font-size: 36px; letter-spacing: 8px; color: #4CAF50; font-family: monospace;">${otp}</h1>
           </div>
-
-          <div style="text-align: center; margin: 30px 0;">
-            <a href="${verificationUrl}" 
-               style="background-color: #4CAF50; color: white; padding: 12px 24px; 
-                      text-decoration: none; border-radius: 5px; font-weight: bold;">
-              Verify via Link (Optional)
-            </a>
-          </div>
-          <p>Or copy and paste this link in your browser:</p>
-          <p style="color: #666; font-size: 12px; word-break: break-all;">${verificationUrl}</p>
-          <p>This code/link will expire in 24 hours.</p>
-          <hr>
-          <p style="font-size: 12px; color: #999;">
-            If you didn't create an account, please ignore this email.
-          </p>
+          
+          <p>This code is highly confidential and will expire in 15 minutes.</p>
+          <hr style="border: none; border-top: 1px solid #eee;">
+          <p style="font-size: 12px; color: #999; text-align: center;">If you didn't create an account, please ignore this email.</p>
         </div>
       `,
     };
 
     const info = await transporter.sendMail(mailOptions);
-    console.log('Verification email sent: %s', info.messageId);
+    console.log('Verification OTP email sent: %s', info.messageId);
     return true;
   } catch (error) {
     console.error('Error sending verification email:', error);
@@ -71,27 +59,23 @@ exports.sendOrderConfirmation = async (email, order) => {
     const mailOptions = {
       from: `"E-Commerce Store" <${process.env.EMAIL_USER}>`,
       to: email,
-      subject: `Order Confirmation - #${order._id}`,
+      subject: `Order Confirmed - #${order._id}`,
       html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>🎉 Order Confirmed!</h2>
-          <p>Thank you for your purchase. Your order has been successfully placed.</p>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+          <h2 style="color: #4CAF50;">📦 Order Confirmed!</h2>
+          <p>Thank you for your purchase. Your payment was processed successfully via Stripe.</p>
           
-          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <h3>Order Details</h3>
+          <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #4CAF50;">
+            <h3 style="margin-top: 0;">Order Summary</h3>
             <p><strong>Order ID:</strong> ${order._id}</p>
             <p><strong>Order Date:</strong> ${new Date(order.createdAt).toLocaleDateString()}</p>
             <p><strong>Total Amount:</strong> $${order.totalAmount.toFixed(2)}</p>
-            <p><strong>Status:</strong> ${order.orderStatus}</p>
+            <p><strong>Status:</strong> Shipped</p>
           </div>
           
-          <p>You can track your order from your account dashboard.</p>
-          <p>If you have any questions, contact our support team.</p>
-          
-          <hr>
-          <p style="font-size: 12px; color: #999;">
-            This is an automated message, please do not reply to this email.
-          </p>
+          <p>You can track the live status of your delivery directly from your account dashboard.</p>
+          <hr style="border: none; border-top: 1px solid #eee;">
+          <p style="font-size: 12px; color: #999; text-align: center;">This is an automated receipt. Please do not reply directly.</p>
         </div>
       `,
     };
@@ -104,44 +88,6 @@ exports.sendOrderConfirmation = async (email, order) => {
 };
 
 /**
- * Send notification email for feedback reply
- * @param {string} email - User's email
- * @param {Object} feedback - Feedback details
- */
-exports.sendFeedbackNotification = async (email, feedback) => {
-  try {
-    const mailOptions = {
-      from: `"E-Commerce Store" <${process.env.EMAIL_USER}>`,
-      to: email,
-      subject: 'Response to Your Feedback',
-      html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>📝 Response to Your Feedback</h2>
-          <p>An admin has responded to your feedback:</p>
-          
-          <div style="background-color: #f0f8ff; padding: 15px; border-radius: 5px; margin: 20px 0;">
-            <p><strong>Your Feedback:</strong> ${feedback.comment}</p>
-            <p><strong>Admin Response:</strong> ${feedback.adminReply}</p>
-          </div>
-          
-          <p>Thank you for helping us improve our service!</p>
-          
-          <hr>
-          <p style="font-size: 12px; color: #999;">
-            This is an automated notification from our feedback system.
-          </p>
-        </div>
-      `,
-    };
-
-    await transporter.sendMail(mailOptions);
-    console.log('Feedback notification email sent to:', email);
-  } catch (error) {
-    console.error('Error sending feedback notification:', error);
-  }
-};
-
-/**
  * Send password reset email
  * @param {string} email - User's email
  * @param {string} resetToken - Password reset token
@@ -149,30 +95,26 @@ exports.sendFeedbackNotification = async (email, feedback) => {
 exports.sendPasswordResetEmail = async (email, resetToken) => {
   try {
     const resetUrl = `${process.env.FRONTEND_URL}/reset-password/${resetToken}`;
-    
+
     const mailOptions = {
       from: `"E-Commerce Store" <${process.env.EMAIL_USER}>`,
       to: email,
       subject: 'Password Reset Request',
       html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2>🔐 Password Reset</h2>
-          <p>You requested to reset your password. Click the button below to create a new password:</p>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
+          <h2 style="color: #007bff; text-align: center;">🔒 Password Reset Request</h2>
+          <p>You requested to reset your password. Click the button below to secure your account and set a new password:</p>
           
           <div style="text-align: center; margin: 30px 0;">
             <a href="${resetUrl}" 
-               style="background-color: #007bff; color: white; padding: 12px 24px; 
-                      text-decoration: none; border-radius: 5px; font-weight: bold;">
+               style="background-color: #007bff; color: white; padding: 12px 24px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">
               Reset Password
             </a>
           </div>
           
-          <p>Or use this link: ${resetUrl}</p>
-          <p>This link will expire in 1 hour.</p>
-          
-          <p style="font-size: 12px; color: #999;">
-            If you didn't request a password reset, please ignore this email.
-          </p>
+          <p style="color: #666; font-size: 12px;">If the button doesn't work, copy and paste this link into your browser:</p>
+          <p style="color: #007bff; font-size: 12px; word-break: break-all;">${resetUrl}</p>
+          <p style="color: #999; font-size: 12px;">This link will strictly expire in 1 hour.</p>
         </div>
       `,
     };

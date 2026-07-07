@@ -23,7 +23,7 @@ const chatMessageSchema = new mongoose.Schema({
   },
   intent: {
     type: String,
-    enum: ['general', 'order_tracking', 'product_search', 'recommendation', 'support', 'feedback', 'greeting'],
+    enum: ['general', 'order_tracking', 'order_history', 'order_stats', 'product_search', 'recommendation', 'support', 'feedback', 'greeting'],
     default: 'general'
   },
   entities: {

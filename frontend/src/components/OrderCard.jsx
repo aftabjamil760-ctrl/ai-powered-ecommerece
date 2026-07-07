@@ -15,6 +15,24 @@ const OrderCard = ({ order }) => {
         cancelled: 'bg-gray-500/10 text-gray-400 border-gray-500/50'
     };
 
+    const getProductId = (productRef) => {
+        if (!productRef) return '';
+        if (typeof productRef === 'string') return productRef;
+        if (typeof productRef === 'object') {
+            const id = productRef._id || productRef.id;
+            return id ? id.toString() : '';
+        }
+        return String(productRef);
+    };
+
+    const getProductName = (productRef) => {
+        if (typeof productRef === 'object' && productRef !== null) {
+            if (productRef.name) return productRef.name;
+            if (productRef.product?.name) return productRef.product.name;
+        }
+        return 'Product';
+    };
+
     return (
         <div className="bg-gray-800 rounded-xl p-6 border border-gray-700 hover:border-blue-500/30 transition-all duration-300">
             <div className="flex flex-col md:flex-row justify-between mb-4 gap-4">
@@ -39,14 +57,25 @@ const OrderCard = ({ order }) => {
             <div className="border-t border-gray-700 pt-4 mb-4">
                 <div className="text-xs text-gray-500 uppercase font-semibold mb-2">Items</div>
                 <div className="space-y-2">
-                    {products.map((item, idx) => (
-                        <div key={idx} className="flex justify-between items-center text-sm">
-                            <span className="text-gray-400">
-                                Product ID: <span className="text-gray-300 font-mono text-xs">{item.productId.substring(0, 8)}...</span> x {item.quantity}
-                            </span>
-                            <span className="text-white font-medium">${item.price.toFixed(2)}</span>
-                        </div>
-                    ))}
+                    {products.map((item, idx) => {
+                        const productId = getProductId(item.productId);
+                        const productName = getProductName(item.productId);
+                        const safePrice = typeof item.price === 'number' ? item.price : 0;
+                        const safeQuantity = Number(item.quantity) || 1;
+
+                        return (
+                            <div key={idx} className="flex justify-between items-center text-sm gap-3">
+                                <span className="text-gray-400 flex-1">
+                                    <span className="text-gray-200 font-medium">{productName}</span>
+                                    {productId && (
+                                        <span className="ml-2 text-gray-300 font-mono text-xs">{productId.slice(0, 8)}...</span>
+                                    )}
+                                    <span className="ml-2">x {safeQuantity}</span>
+                                </span>
+                                <span className="text-white font-medium">${safePrice.toFixed(2)}</span>
+                            </div>
+                        );
+                    })}
                 </div>
             </div>
 
@@ -65,19 +94,22 @@ const OrderCard = ({ order }) => {
                     </button>
                     {showFeedback && (
                         <div className="mt-4">
-                            {products.map((item, idx) => (
-                                <div key={idx} className="mb-4 last:mb-0">
-                                    <p className="text-gray-300 text-sm mb-2">Reviewing: Product {item.productId.substring(0, 8)}</p>
-                                    <FeedbackForm
-                                        productId={item.productId}
-                                        orderId={_id}
-                                        onSuccess={() => {
-                                            setShowFeedback(false);
-                                            alert('Thank you for your feedback!');
-                                        }}
-                                    />
-                                </div>
-                            ))}
+                            {products.map((item, idx) => {
+                                const productId = getProductId(item.productId);
+                                return (
+                                    <div key={idx} className="mb-4 last:mb-0">
+                                        <p className="text-gray-300 text-sm mb-2">Reviewing: {getProductName(item.productId)} {productId ? `${productId.slice(0, 8)}...` : ''}</p>
+                                        <FeedbackForm
+                                            productId={productId || item.productId}
+                                            orderId={_id}
+                                            onSuccess={() => {
+                                                setShowFeedback(false);
+                                                alert('Thank you for your feedback!');
+                                            }}
+                                        />
+                                    </div>
+                                );
+                            })}
                         </div>
                     )}
                 </div>

@@ -1,3 +1,4 @@
+
 const mongoose = require('mongoose');
 
 const paymentSchema = new mongoose.Schema({
@@ -13,7 +14,7 @@ const paymentSchema = new mongoose.Schema({
   },
   gateway: {
     type: String,
-    enum: ['stripe', 'easypaisa', 'jazzcash', 'bank_transfer', 'cod'],
+    enum: ['stripe'], // باقی تمام گیٹ ویز ریموو کر دیے گئے ہیں
     required: true
   },
   transactionId: {
@@ -27,8 +28,8 @@ const paymentSchema = new mongoose.Schema({
   },
   currency: {
     type: String,
-    default: 'PKR',
-    enum: ['PKR', 'USD', 'EUR', 'GBP']
+    default: 'USD', // سٹرائپ کے لیے ڈیفالٹ USD کر دیا گیا ہے
+    enum: ['USD', 'EUR', 'GBP', 'PKR']
   },
   status: {
     type: String,
@@ -37,7 +38,7 @@ const paymentSchema = new mongoose.Schema({
   },
   paymentMethod: {
     type: String,
-    enum: ['card', 'wallet', 'bank', 'cod', 'other']
+    enum: ['card'] // صرف کارڈ پیمنٹ باقی رکھی ہے
   },
   paymentDetails: {
     type: Object,
@@ -74,6 +75,4 @@ paymentSchema.pre('save', function(next) {
   next();
 });
 
-const Payment = mongoose.model('Payment', paymentSchema);
-
-module.exports = Payment;
+module.exports = mongoose.model('Payment', paymentSchema);

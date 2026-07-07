@@ -1,3 +1,4 @@
+
 const Product = require('../../models/Product');
 const Order = require('../../models/Order');
 const ChatMessage = require('../models/ChatMessage');
@@ -5,68 +6,78 @@ const vectorStore = require('../utils/vectorStore');
 
 class RecommendationService {
   /**
-   * Get personalized recommendations based on user history
+   * Get personalized recommendations based on user history and vector similarity
    */
-  async getPersonalizedRecommendations(userId, limit = 5) {
+  getPersonalizedRecommendations = async (userId, limit = 5) => {
     try {
-      // Get user's order history
+      if (!userId || userId === 'guest') {
+        return await this.getPopularProducts(limit);
+      }
+
+      // Get user's recent order patterns
       const orders = await Order.find({ userId })
         .populate('products.productId')
         .sort({ createdAt: -1 })
         .limit(10);
-
+        
       if (orders.length === 0) {
         return await this.getPopularProducts(limit);
       }
 
-      // Get product IDs from user's orders
+      // Gather matching database references safely
       const productIds = [];
       orders.forEach(order => {
-        order.products.forEach(item => {
-          if (item.productId) {
-            productIds.push(item.productId._id);
-          }
-        });
+        if (order.products) {
+          order.products.forEach(item => {
+            if (item.productId && item.productId._id) {
+              productIds.push(item.productId._id.toString());
+            }
+          });
+        }
       });
 
-      // Get similar products using vector search
       const uniqueProductIds = [...new Set(productIds)];
-      
-      // Find similar products
       let recommendations = [];
-      
+
+      // Vector search relative context expansion up to top 3 products
       for (const productId of uniqueProductIds.slice(0, 3)) {
         const product = await Product.findById(productId);
         if (product) {
           const similar = await vectorStore.searchSimilarProducts(
-            `${product.name} ${product.category}`,
+            `${product.name} ${product.category || ''}`,
             3
           );
-          recommendations = [...recommendations, ...similar];
+          if (Array.isArray(similar)) {
+            recommendations = [...recommendations, ...similar];
+          }
         }
       }
 
-      // Remove duplicates and limit
+      // Deduplicate vector models outputs cleanly
       const seen = new Set();
       const uniqueRecommendations = recommendations.filter(item => {
-        if (seen.has(item.id)) return false;
-        seen.add(item.id);
+        const itemId = item.id || item._id?.toString();
+        if (!itemId || seen.has(itemId)) return false;
+        seen.add(itemId);
         return true;
       });
 
+      if (uniqueRecommendations.length === 0) {
+        return await this.getPopularProducts(limit);
+      }
+
       return uniqueRecommendations.slice(0, limit);
     } catch (error) {
-      console.error('Error getting personalized recommendations:', error);
+      console.error('Error compounding personalized vectors mapping:', error);
       return await this.getPopularProducts(limit);
     }
-  }
+  };
 
   /**
-   * Get popular products
+   * Get popular products via MongoDB aggregation aggregation metrics
    */
-  async getPopularProducts(limit = 5) {
+  getPopularProducts = async (limit = 5) => {
     try {
-      // Aggregate orders to find popular products
       const popularProducts = await Order.aggregate([
         { $unwind: '$products' },
         {
@@ -90,7 +101,7 @@ class RecommendationService {
       ]);
 
       return popularProducts.map(item => ({
-        id: item._id,
+        id: item._id?.toString(),
         name: item.productDetails.name,
         category: item.productDetails.category,
         price: item.productDetails.price,
@@ -101,49 +112,51 @@ class RecommendationService {
         revenue: item.totalRevenue
       }));
     } catch (error) {
-      console.error('Error getting popular products:', error);
+      console.error('Error calculating analytical popular data maps:', error);
       return [];
     }
-  }
+  };
 
   /**
-   * Get recommendations based on current conversation
+   * Get recommendations optimized against current dialogue window parameters
    */
-  async getConversationBasedRecommendations(chatHistory, limit = 3) {
+  getConversationBasedRecommendations = async (chatHistory, limit = 3) => {
     try {
-      // Extract product mentions from chat
       const productMentions = [];
-      for (const msg of chatHistory) {
-        if (msg.role === 'user') {
-          // Simple keyword extraction (could be enhanced with NLP)
-          const words = msg.content.toLowerCase().split(' ');
+      const stopWords = ['please', 'want', 'need', 'show', 'find', 'with', 'have', 'that'];
+
+      for (const msg of (chatHistory || [])) {
+        if (msg.role === 'user' && msg.content) {
+          const words = msg.content.toLowerCase().split(/\s+/);
           for (const word of words) {
-            if (word.length > 3) {
-              productMentions.push(word);
+            const cleanWord = word.replace(/[^a-zA-Z0-9]/g, '');
+            if (cleanWord.length > 3 && !stopWords.includes(cleanWord)) {
+              productMentions.push(cleanWord);
             }
           }
         }
       }
 
-      // Search for products matching mentioned keywords
       if (productMentions.length > 0) {
-        const query = productMentions.slice(0, 5).join(' ');
+        const query = productMentions.slice(-5).join(' '); // prioritize latest terms
         const results = await vectorStore.searchSimilarProducts(query, limit);
-        return results;
+        if (Array.isArray(results) && results.length > 0) return results;
       }
 
       return await this.getPopularProducts(limit);
     } catch (error) {
-      console.error('Error getting conversation-based recommendations:', error);
+      console.error('Error binding dialogue vector streams:', error);
       return [];
     }
-  }
+  };
 
   /**
-   * Get product recommendations by category
+   * Get product recommendations matching direct categories regex parameters
    */
-  async getRecommendationsByCategory(category, limit = 5) {
+  getRecommendationsByCategory = async (category, limit = 5) => {
     try {
+      if (!category) return [];
+      
       const products = await Product.find({ 
         category: { $regex: category, $options: 'i' },
         stock: { $gt: 0 }
@@ -152,7 +165,7 @@ class RecommendationService {
       .limit(limit);
 
       return products.map(product => ({
-        id: product._id,
+        id: product._id?.toString(),
         name: product.name,
         description: product.description,
         price: product.price,
@@ -162,43 +175,46 @@ class RecommendationService {
         stock: product.stock
       }));
     } catch (error) {
-      console.error('Error getting recommendations by category:', error);
+      console.error('Error fetching structural category maps:', error);
       return [];
     }
-  }
+  };
 
   /**
-   * Get hybrid recommendations (personalized + popular)
+   * Get dynamic hybrid clusters (Personalized + Analytical Volume Fallbacks)
    */
-  async getHybridRecommendations(userId = null, limit = 5) {
+  getHybridRecommendations = async (userId = null, limit = 5) => {
     try {
       let recommendations = [];
-
-      if (userId) {
-        // Get personalized recommendations
-        const personalized = await this.getPersonalizedRecommendations(userId, Math.ceil(limit / 2));
-        recommendations = [...recommendations, ...personalized];
+      
+      if (userId && userId !== 'guest') {
+        const targetSlice = Math.ceil(limit / 2);
+        const personalized = await this.getPersonalizedRecommendations(userId, targetSlice);
+        if (Array.isArray(personalized)) {
+          recommendations = [...recommendations, ...personalized];
+        }
       }
 
-      // Fill remaining with popular products
       const remaining = limit - recommendations.length;
       if (remaining > 0) {
         const popular = await this.getPopularProducts(remaining);
-        recommendations = [...recommendations, ...popular];
+        if (Array.isArray(popular)) {
+          recommendations = [...recommendations, ...popular];
+        }
       }
 
-      // Remove duplicates
       const seen = new Set();
       return recommendations.filter(item => {
-        if (seen.has(item.id)) return false;
-        seen.add(item.id);
+        const itemId = item.id || item._id?.toString();
+        if (!itemId || seen.has(itemId)) return false;
+        seen.add(itemId);
         return true;
       });
     } catch (error) {
-      console.error('Error getting hybrid recommendations:', error);
+      console.error('Error compiling balanced hybrid recommendations:', error);
       return await this.getPopularProducts(limit);
     }
-  }
+  };
 }
 
 module.exports = new RecommendationService();

@@ -1,9 +1,14 @@
+
 const mongoose = require('mongoose');
 
 const notificationSchema = new mongoose.Schema({
-  userId: mongoose.Schema.Types.ObjectId,
-  message: String,
-  type: String, // 'feedback_reply', 'order_update', etc.
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  message: { type: String, required: true },
+  type: { type: String, enum: ['order_update'], default: 'order_update' }, // صرف آرڈر ٹریکنگ اپڈیٹ رکھا ہے
   isRead: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now }
 });

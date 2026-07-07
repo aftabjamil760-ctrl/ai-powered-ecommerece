@@ -5,6 +5,7 @@ import Chatbot from '../components/Chatbot';
 const Home = () => {
     const navigate = useNavigate();
     const [user, setUser] = useState(null);
+    const [userRole, setUserRole] = useState('customer');
     const [showChatbot, setShowChatbot] = useState(false);
 
     useEffect(() => {
@@ -15,7 +16,9 @@ const Home = () => {
             navigate('/login');
         } else {
             if (userData) {
-                setUser(JSON.parse(userData));
+                const parsedUser = JSON.parse(userData);
+                setUser(parsedUser);
+                setUserRole(parsedUser.role || 'customer');
             }
         }
     }, [navigate]);
@@ -88,6 +91,22 @@ const Home = () => {
                             <h3 className="font-bold mb-2 text-green-400">Payments</h3>
                             <p className="text-sm text-gray-400">Manage transaction history</p>
                         </div>
+                        <div
+                            onClick={() => navigate('/feedback')}
+                            className="bg-gray-700/50 p-6 rounded-lg cursor-pointer hover:bg-gray-700 transition duration-200 border border-purple-500/30"
+                        >
+                            <h3 className="font-bold mb-2 text-purple-400">Feedback</h3>
+                            <p className="text-sm text-gray-400">See reviews and responses for orders</p>
+                        </div>
+                        {user.role === 'admin' && (
+                            <div
+                                onClick={() => navigate('/analytics')}
+                                className="bg-gray-700/50 p-6 rounded-lg cursor-pointer hover:bg-gray-700 transition duration-200 border border-yellow-500/30"
+                            >
+                                <h3 className="font-bold mb-2 text-yellow-400">Analytics</h3>
+                                <p className="text-sm text-gray-400">View site performance and reports</p>
+                            </div>
+                        )}
                         <div className="bg-gray-700/50 p-6 rounded-lg cursor-pointer hover:bg-gray-700 transition duration-200">
                             <h3 className="font-bold mb-2 text-green-400">Support</h3>
                             <p className="text-sm text-gray-400">Get help with your purchases</p>

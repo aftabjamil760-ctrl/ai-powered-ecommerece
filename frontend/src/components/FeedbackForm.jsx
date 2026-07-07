@@ -47,7 +47,7 @@ const FeedbackForm = ({ productId, orderId, onSuccess }) => {
                     <textarea
                         value={comment}
                         onChange={(e) => setComment(e.target.value)}
-                        className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none h-32 resize-none"
+                        className="w-full p-3 border border-gray-200 rounded-lg focus:ring-2 focus:ring-indigo-500 outline-none h-32 resize-none text-gray-900 bg-white placeholder-gray-400"
                         placeholder="What was your experience with this product?"
                         required
                     />

@@ -1,16 +1,17 @@
+
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Payment = require('../models/Payment');
 const Notification = require('../models/Notification');
 const { processPayment, verifyStripePayment } = require('../utils/paymentService');
 
+// Create Order and Initialize Stripe Payment
 exports.createOrder = async (req, res) => {
   try {
     const { products, deliveryAddress } = req.body;
     const userId = req.user._id;
-    
-    // Calculate total and check stock
     let totalAmount = 0;
+
     for (const item of products) {
       const product = await Product.findById(item.productId);
       if (!product) throw new Error(`Product ${item.productId} not found`);
@@ -18,8 +19,7 @@ exports.createOrder = async (req, res) => {
       
       totalAmount += (product.price - (product.price * (product.discount / 100))) * item.quantity;
     }
-    
-    // Create order
+
     const order = new Order({
       userId,
       products,
@@ -28,20 +28,19 @@ exports.createOrder = async (req, res) => {
       paymentStatus: 'pending',
       orderStatus: 'processing'
     });
-    
+
     await order.save();
-    
-    // Process payment (integrate with Stripe/Razorpay/etc.)
+
+    // Process Stripe Payment
     const paymentResult = await processPayment({
       amount: totalAmount,
       orderId: order._id,
       customerEmail: req.user.email
     });
-    
-    // Update order with payment ID
+
     order.paymentId = paymentResult.paymentId;
     await order.save();
-    
+
     res.json({
       orderId: order._id,
       paymentUrl: paymentResult.paymentUrl,
@@ -52,50 +51,45 @@ exports.createOrder = async (req, res) => {
   }
 };
 
+// Handle Stripe Payment Success Verification
 exports.paymentSuccess = async (req, res) => {
   try {
-    const { orderId, paymentId, gateway = 'stripe' } = req.body;
-    
+    const { orderId, paymentId } = req.body;
+
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ error: 'Order not found' });
-
     if (order.userId.toString() !== req.user._id.toString()) {
       return res.status(401).json({ error: 'Not authorized' });
     }
-
-    // Idempotency: if already succeeded, don't double-decrement stock
     if (order.paymentStatus === 'success') {
       return res.json({ message: 'Order already confirmed.' });
     }
 
-    // Verify payment before marking order paid
-    if (gateway === 'stripe') {
-      const verification = await verifyStripePayment(paymentId);
-      if (!verification.success) {
-        order.paymentStatus = 'failed';
-        await order.save();
-        return res.status(400).json({ error: 'Stripe payment not confirmed' });
-      }
+    // Verify Stripe Payment
+    const verification = await verifyStripePayment(paymentId);
+    if (!verification.success) {
+      order.paymentStatus = 'failed';
+      await order.save();
+      return res.status(400).json({ error: 'Stripe payment not confirmed' });
     }
-    
+
     // Update stock
     for (const item of order.products) {
       await Product.findByIdAndUpdate(item.productId, {
         $inc: { stock: -item.quantity }
       });
     }
-    
-    // Update order status
+
     order.paymentStatus = 'success';
     order.orderStatus = 'shipped';
     order.paymentId = paymentId;
     await order.save();
-    
+
     // Save payment record
     await Payment.create({
       userId: order.userId,
       orderId: order._id,
-      gateway,
+      gateway: 'stripe',
       transactionId: paymentId,
       amount: order.totalAmount,
       currency: 'USD',
@@ -104,43 +98,49 @@ exports.paymentSuccess = async (req, res) => {
       metadata: { orderId: order._id.toString() },
     });
 
-    // Notify customer (delivery team simulation via order status)
+    // Notify customer
     await Notification.create({
       userId: order.userId,
       type: 'order_update',
-      message: `Payment received for Order #${order._id}. Your order has been handed to delivery team.`,
+      message: `Payment received for Order #${order._id}. Your order has been handed over to the delivery team.`,
     });
-    
-    res.json({ message: 'Payment successful. Order shipped to delivery team.' });
+
+    res.json({ message: 'Payment successful. Order shipped.' });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
 
+// Update Order Tracking Status & Send Notifications
 exports.updateDeliveryStatus = async (req, res) => {
   try {
     const { orderId, status } = req.body;
-    
+
     const order = await Order.findById(orderId);
     if (!order) return res.status(404).json({ error: 'Order not found' });
-    
+
     order.orderStatus = status;
     await order.save();
-    
-    if (status === 'delivered') {
-      // TODO: Send notification to customer
-      // TODO: Save to service logs
-    }
-    
+
+    // Active Notification integration for Order Tracking
+    await Notification.create({
+      userId: order.userId,
+      type: 'order_update',
+      message: `Your Order #${order._id} status changes to: ${status}.`,
+    });
+
     res.json({ message: `Delivery status updated to ${status}` });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 };
 
+// Get Logged-in User's Orders
 exports.getMyOrders = async (req, res) => {
   try {
-    const orders = await Order.find({ userId: req.user._id }).sort({ createdAt: -1 });
+    const orders = await Order.find({ userId: req.user._id })
+      .sort({ createdAt: -1 })
+      .populate('products.productId', 'name');
     res.json(orders);
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -1,34 +1,35 @@
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+
+const ollamaService = require('./ollamaService');
 
 class EmbeddingService {
   constructor() {
-    this.genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    this.model = this.genAI.getGenerativeModel({ model: process.env.GEMINI_EMBEDDING_MODEL || 'embedding-001' });
+    // Single point of configuration for the application's vector processing pipeline
+    this.vectorProvider = ollamaService;
   }
 
-  async generateEmbedding(text) {
+  /**
+   * Generates a single vector embedding for semantic or semantic-hybrid lookup
+   */
+  generateEmbedding = async (text) => {
     try {
-      const result = await this.model.embedContent(text);
-      return result.embedding.values;
+      return await this.vectorProvider.generateEmbedding(text);
     } catch (error) {
-      console.error('Error generating embedding:', error);
+      console.error('Critical execution fault under structural vector extraction sequence:', error);
       throw error;
     }
-  }
+  };
 
-  async generateBatchEmbeddings(texts) {
+  /**
+   * Generates a batch collection of vector embeddings for bulk product dataset parsing
+   */
+  generateBatchEmbeddings = async (texts) => {
     try {
-      const embeddings = [];
-      for (const text of texts) {
-        const embedding = await this.generateEmbedding(text);
-        embeddings.push(embedding);
-      }
-      return embeddings;
+      return await this.vectorProvider.generateBatchEmbeddings(texts);
     } catch (error) {
-      console.error('Error generating batch embeddings:', error);
+      console.error('Batch vector maps compilation process failure:', error);
       throw error;
     }
-  }
+  };
 }
 
 module.exports = new EmbeddingService();

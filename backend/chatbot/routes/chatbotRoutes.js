@@ -12,11 +12,26 @@ const adminAuth = require('../../middleware/adminAuthMiddleware');
 router.post('/message', chatbotController.chat);
 
 /**
+ * @route   POST /api/chatbot/message/customer
+ * @desc    Customer chatbot conversation
+ * @access  Private
+ */
+router.post('/message/customer', protect, chatbotController.customerChat);
+
+/**
+ * @route   POST /api/chatbot/message/admin
+ * @desc    Admin chatbot conversation
+ * @access  Admin
+ */
+router.post('/message/admin', protect, adminAuth, chatbotController.adminChat);
+
+/**
  * @route   GET /api/chatbot/history/:sessionId
  * @desc    Get chat history
  * @access  Private
  */
 router.get('/history/:sessionId', protect, chatbotController.getHistory);
+router.get('/session', protect, chatbotController.getLastSession);
 
 /**
  * @route   GET /api/chatbot/context/:sessionId
