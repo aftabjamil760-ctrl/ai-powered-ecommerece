@@ -1,0 +1,3648 @@
+
+
+Backend:
+
+const RAGService = require('../services/ragService');
+const MemoryService = require('../services/memoryService');
+const RecommendationService = require('../services/recommendationService');
+const vectorStore = require('../utils/vectorStore');
+const Order = require('../../models/Order');
+const Product = require('../../models/Product');
+const Feedback = require('../../models/Feedback');
+
+class ChatbotController {
+  /**
+   * Process incoming chat messages from users or guests
+   */
+  chat = async (req, res) => {
+    try {
+      const { message, sessionId } = req.body;
+      const userId = req.user?._id || null;
+
+      if (!message) {
+        return res.status(400).json({
+          success: false,
+          error: 'Message context is required'
+        });
+      }
+
+      // Track or spin up a new AI conversational session
+      const session = await MemoryService.getOrCreateSession(
+        userId || 'guest',
+        sessionId
+      );
+
+      // Persist raw user input into MongoDB
+      await MemoryService.saveMessage(
+        session.sessionId,
+        userId || 'guest',
+        'user',
+        message
+      );
+
+      // Extract context history window (Top 10 items) for LLM context injection
+      const chatHistory = await MemoryService.getRecentMessages(session.sessionId, 10);
+
+      // Invoke internal RAG orchestration pipeline
+      const result = await RAGService.generateResponse(
+        message,
+        userId,
+        session.sessionId,
+        chatHistory
+      );
+
+      // Evaluate parsed semantic intent hooks
+      let orderStatus = null;
+      if (result.intent === 'order_tracking' || result.entities?.orderId) {
+        orderStatus = await this.handleOrderTracking(
+          userId,
+          result.entities?.orderId
+        );
+      }
+
+      let recommendations = [];
+      if (result.intent === 'recommendation' || result.intent === 'product_search') {
+        recommendations = await RecommendationService.getHybridRecommendations(
+          userId,
+          3
+        );
+      }
+
+      // Persist generative AI answer back into history
+      await MemoryService.saveMessage(
+        session.sessionId,
+        userId || 'guest',
+        'assistant',
+        result.response,
+        result.intent,
+        result.entities,
+        {
+          products: result.context?.products?.length || 0,
+          orders: result.context?.orders?.length || 0,
+          processingTime: result.processingTime
+        }
+      );
+
+      // Synchronize sentiment trends
+      await MemoryService.updateSentiment(session.sessionId, 'positive');
+
+      return res.json({
+        success: true,
+        data: {
+          response: result.response,
+          sessionId: session.sessionId,
+          intent: result.intent,
+          entities: result.entities,
+          orderStatus,
+          recommendations,
+          context: result.context,
+          productMeta: result.productMeta || null,
+          products: result.products || [],
+          orders: result.orders || []
+        }
+      });
+    } catch (error) {
+      console.error('Core routing chat failure:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  };
+
+  customerChat = async (req, res) => {
+    try {
+      const { message, sessionId } = req.body;
+      const userId = req.user?._id;
+
+      if (!message) {
+        return res.status(400).json({
+          success: false,
+          error: 'Message context is required'
+        });
+      }
+
+      const session = await MemoryService.getOrCreateSession(userId, sessionId);
+
+      await MemoryService.saveMessage(
+        session.sessionId,
+        userId,
+        'user',
+        message
+      );
+
+      const chatHistory = await MemoryService.getRecentMessages(session.sessionId, 10);
+      const result = await RAGService.generateResponse(
+        message,
+        userId,
+        session.sessionId,
+        chatHistory
+      );
+
+      let orderStatus = null;
+      if (result.intent === 'order_tracking' || result.entities?.orderId) {
+        orderStatus = await this.handleOrderTracking(userId, result.entities?.orderId);
+      }
+
+      let recommendations = [];
+      if (result.intent === 'recommendation' || result.intent === 'product_search') {
+        recommendations = await RecommendationService.getHybridRecommendations(userId, 3);
+      }
+
+      await MemoryService.saveMessage(
+        session.sessionId,
+        userId,
+        'assistant',
+        result.response,
+        result.intent,
+        result.entities,
+        {
+          products: result.context?.products?.length || 0,
+          orders: result.context?.orders?.length || 0,
+          processingTime: result.processingTime
+        }
+      );
+
+      await MemoryService.updateSentiment(session.sessionId, 'positive');
+
+      return res.json({
+        success: true,
+        data: {
+          response: result.response,
+          sessionId: session.sessionId,
+          intent: result.intent,
+          entities: result.entities,
+          orderStatus,
+          recommendations,
+          context: result.context,
+          productMeta: result.productMeta || null,
+          products: result.products || [],
+          orders: result.orders || []
+        }
+      });
+    } catch (error) {
+      console.error('Customer chat failure:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  };
+
+  adminChat = async (req, res) => {
+    try {
+      const { message, sessionId } = req.body;
+      const userId = req.user?._id;
+
+      if (!message) {
+        return res.status(400).json({
+          success: false,
+          error: 'Message context is required'
+        });
+      }
+
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({
+          success: false,
+          error: 'Administrator access is required for this endpoint.'
+        });
+      }
+
+      const session = await MemoryService.getOrCreateSession(userId, sessionId);
+
+      await MemoryService.saveMessage(
+        session.sessionId,
+        userId,
+        'user',
+        message
+      );
+
+      const responseText = await this.handleAdminQuery(message);
+
+      await MemoryService.saveMessage(
+        session.sessionId,
+        userId,
+        'assistant',
+        responseText,
+        'admin_analytics'
+      );
+
+      return res.json({
+        success: true,
+        data: {
+          response: responseText,
+          sessionId: session.sessionId,
+          intent: 'admin_analytics'
+        }
+      });
+    } catch (error) {
+      console.error('Admin chat failure:', error);
+      return res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  };
+
+  handleAdminQuery = async (message) => {
+    const normalized = (message || '').toLowerCase();
+
+    if (/total.*success|successful.*orders|successful order|success.*orders|order.*success|success.*payments/.test(normalized)) {
+      return this.getOrderSuccessSummary();
+    }
+
+    if (/revenue|sales|income|earnings|turnover/.test(normalized)) {
+      return this.getSalesOverview();
+    }
+
+    if (/order count|total orders|order volume|order summary|order statistics|order(s)?$/.test(normalized)) {
+      return this.getOrderSummary();
+    }
+
+    if (/low stock|inventory|stock alert|out of stock/.test(normalized)) {
+      return this.getLowStockSummary();
+    }
+
+    if (/feedback|reviews|customer sentiment|rating|complaint/.test(normalized)) {
+      return this.getFeedbackSummary();
+    }
+
+    if (/health|system|errors|status|uptime/.test(normalized)) {
+      return this.getSystemHealthSummary();
+    }
+
+    return 'I can help with sales, revenue, order counts, inventory alerts, feedback summaries, and system status. Try asking “sales overview”, “low stock products”, or “customer feedback summary”.';
+  };
+
+  getSalesOverview = async () => {
+    const summary = await Order.aggregate([
+      { $match: { paymentStatus: 'success' } },
+      {
+        $group: {
+          _id: null,
+          totalRevenue: { $sum: '$totalAmount' },
+          totalOrders: { $sum: 1 }
+        }
+      }
+    ]);
+
+    const totalRevenue = summary[0]?.totalRevenue || 0;
+    const totalOrders = summary[0]?.totalOrders || 0;
+    return `Sales overview: $${totalRevenue.toFixed(2)} total revenue across ${totalOrders} successful orders.`;
+  };
+
+  getOrderSummary = async () => {
+    const summary = await Order.aggregate([
+      {
+        $group: {
+          _id: '$orderStatus',
+          count: { $sum: 1 }
+        }
+      }
+    ]);
+
+    if (!summary.length) {
+      return 'No orders have been recorded yet.';
+    }
+
+    const segments = summary.map(s => `${s.count} ${s._id || 'unknown'}`);
+    return `Order summary: ${segments.join(', ')}.`;
+  };
+
+  getOrderSuccessSummary = async () => {
+    const successCount = await Order.countDocuments({ paymentStatus: 'success' });
+    const deliveredCount = await Order.countDocuments({ orderStatus: 'delivered' });
+    const shippedCount = await Order.countDocuments({ orderStatus: 'shipped' });
+    return `Success summary: ${successCount} successful payments, ${shippedCount} orders shipped, and ${deliveredCount} orders delivered.`;
+  };
+
+  getLowStockSummary = async () => {
+    const lowStock = await Product.find({ stock: { $lt: 10 } }).limit(10).select('name stock');
+    if (!lowStock.length) {
+      return 'Inventory looks healthy: no products are below the low-stock threshold.';
+    }
+    return `Low stock products: ${lowStock.map(p => `${p.name} (${p.stock} left)`).join(', ')}.`;
+  };
+
+  getFeedbackSummary = async () => {
+    const total = await Feedback.countDocuments();
+    const positive = await Feedback.countDocuments({ rating: { $gte: 4 } });
+    const neutral = await Feedback.countDocuments({ rating: 3 });
+    const negative = await Feedback.countDocuments({ rating: { $lte: 2 } });
+
+    return `Feedback summary: ${total} reviews total, ${positive} positive, ${neutral} neutral, and ${negative} needing attention.`;
+  };
+
+  getSystemHealthSummary = async () => {
+    return 'System health: core services are operational. Monitor logs for any critical incidents and verify the embedding/index pipeline if you want deeper diagnostics.';
+  };
+
+  /**
+   * Internal pipeline for pulling business intelligence order records
+   */
+  handleOrderTracking = async (userId, orderId) => {
+    try {
+      let order;
+
+      if (orderId) {
+        order = await Order.findById(orderId).populate('products.productId');
+      } else if (userId) {
+        order = await Order.findOne({ userId })
+          .sort({ createdAt: -1 })
+          .populate('products.productId');
+      }
+
+      if (!order) {
+        return {
+          found: false,
+          message: 'No tracking reference found. Please provide an explicit Order ID.'
+        };
+      }
+
+      return {
+        found: true,
+        orderId: order._id,
+        status: order.orderStatus,
+        paymentStatus: order.paymentStatus,
+        totalAmount: order.totalAmount,
+        createdAt: order.createdAt,
+        products: order.products.map(item => ({
+          name: item.productId?.name || 'Archived/Unknown Product',
+          quantity: item.quantity,
+          price: item.price
+        })),
+        deliveryAddress: order.deliveryAddress,
+        estimatedDelivery: this.calculateEstimatedDelivery(order.createdAt)
+      };
+    } catch (error) {
+      console.error('Error matching delivery state queries:', error);
+      return {
+        found: false,
+        error: 'Failed to accurately parse delivery indexes'
+      };
+    }
+  };
+
+  /**
+   * Safe delivery matrix window estimation
+   */
+  calculateEstimatedDelivery = (createdAt) => {
+    const deliveryDate = new Date(createdAt);
+    deliveryDate.setDate(deliveryDate.getDate() + 5); // Fallback standard: 5-day dispatch SLA
+    return deliveryDate.toISOString().split('T')[0];
+  };
+
+  /**
+   * History extraction routing
+   */
+  getHistory = async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      const { limit = 20 } = req.query;
+
+      if (!sessionId) {
+        return res.status(400).json({ success: false, error: 'Target session scope required' });
+      }
+
+      const messages = await MemoryService.getChatHistory(sessionId, parseInt(limit));
+      return res.json({ success: true, data: messages });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  };
+
+  getLastSession = async (req, res) => {
+    try {
+      const userId = req.user?._id;
+      if (!userId) {
+        return res.status(401).json({ success: false, error: 'Not authorized' });
+      }
+
+      const session = await MemoryService.getLastSession(userId);
+      if (!session) {
+        return res.json({ success: true, data: null });
+      }
+
+      return res.json({ success: true, data: { sessionId: session.sessionId } });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  };
+
+  /**
+   * In-memory context fetching
+   */
+  getSessionContext = async (req, res) => {
+    try {
+      const { sessionId } = req.params;
+      if (!sessionId) {
+        return res.status(400).json({ success: false, error: 'Session reference identifier missing' });
+      }
+      const context = await MemoryService.getSessionContext(sessionId);
+      return res.json({ success: true, data: context });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  };
+
+  /**
+   * Contextual cross-selling & upselling generation
+   */
+  getRecommendations = async (req, res) => {
+    try {
+      const userId = req.user?._id || null;
+      const { limit = 5, type = 'hybrid' } = req.query;
+      let recommendations;
+
+      switch (type) {
+        case 'personalized':
+          recommendations = await RecommendationService.getPersonalizedRecommendations(userId, parseInt(limit));
+          break;
+        case 'popular':
+          recommendations = await RecommendationService.getPopularProducts(parseInt(limit));
+          break;
+        default:
+          recommendations = await RecommendationService.getHybridRecommendations(userId, parseInt(limit));
+      }
+
+      return res.json({ success: true, data: recommendations });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  };
+
+  /**
+   * Soft session invalidation/cleanup
+   */
+  endSession = async (req, res) => {
+    try {
+      const { sessionId } = req.body;
+      if (!sessionId) {
+        return res.status(400).json({ success: false, error: 'Session signature required to flush records' });
+      }
+      await MemoryService.endSession(sessionId);
+      return res.json({ success: true, message: 'Conversational session flushed successfully' });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  };
+
+  /**
+   * Production Cron or Admin Sync to compile embeddings
+   */
+  indexProducts = async (req, res) => {
+    try {
+      if (req.user?.role !== 'admin') {
+        return res.status(403).json({ success: false, error: 'Operation unauthorized. Restricted scope.' });
+      }
+      const count = await vectorStore.indexAllProducts();
+      return res.json({
+        success: true,
+        message: `Successfully generated mathematical models for ${count} store assets`,
+        data: { indexed: count }
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  };
+
+  /**
+   * Vector-based Semantic Asset Retrieval
+   */
+  searchProducts = async (req, res) => {
+    try {
+      const { query, limit = 10 } = req.query;
+      if (!query) {
+        return res.status(400).json({ success: false, error: 'Natural language search query token expected' });
+      }
+      const results = await vectorStore.searchSimilarProducts(query, parseInt(limit));
+      return res.json({ success: true, data: results });
+    } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  };
+}
+
+module.exports = new ChatbotController();
+
+
+
+
+
+model:
+
+const mongoose = require('mongoose');
+
+const chatMessageSchema = new mongoose.Schema({
+  sessionId: {
+    type: String,
+    required: true,
+    index: true
+  },
+  userId: {
+    type: mongoose.Schema.Types.Mixed,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  role: {
+    type: String,
+    enum: ['user', 'assistant', 'system'],
+    required: true
+  },
+  content: {
+    type: String,
+    required: true
+  },
+  intent: {
+    type: String,
+    enum: ['general', 'order_tracking', 'order_history', 'order_stats', 'product_search', 'recommendation', 'support', 'feedback', 'greeting'],
+    default: 'general'
+  },
+  entities: {
+    type: Object,
+    default: {}
+  },
+  metadata: {
+    productId: mongoose.Schema.Types.ObjectId,
+    orderId: mongoose.Schema.Types.ObjectId,
+    confidence: Number,
+    processingTime: Number,
+    tokens: Number
+  },
+  vectorized: {
+    type: Boolean,
+    default: false
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Indexes
+chatMessageSchema.index({ sessionId: 1, createdAt: -1 });
+chatMessageSchema.index({ userId: 1, createdAt: -1 });
+
+module.exports = mongoose.model('ChatMessage', chatMessageSchema);
+
+
+
+
+
+
+
+
+const mongoose = require('mongoose');
+
+const chatSessionSchema = new mongoose.Schema({
+  userId: {
+    type: mongoose.Schema.Types.Mixed,
+    ref: 'User',
+    required: true,
+    index: true
+  },
+  sessionId: {
+    type: String,
+    required: true,
+    unique: true,
+    index: true
+  },
+  context: {
+    type: Object,
+    default: {}
+  },
+  metadata: {
+    userAgent: String,
+    ipAddress: String,
+    deviceType: String
+  },
+  summary: {
+    type: String,
+    default: ''
+  },
+  keyTopics: [String],
+  sentiment: {
+    type: String,
+    enum: ['positive', 'neutral', 'negative'],
+    default: 'neutral'
+  },
+  messageCount: {
+    type: Number,
+    default: 0
+  },
+  active: {
+    type: Boolean,
+    default: true
+  },
+  lastActivity: {
+    type: Date,
+    default: Date.now
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Auto-update timestamps
+chatSessionSchema.pre('save', async function(next) {
+  this.updatedAt = Date.now();
+  
+});
+
+module.exports = mongoose.model('ChatSession', chatSessionSchema);
+
+
+
+
+const mongoose = require('mongoose');
+
+const productEmbeddingSchema = new mongoose.Schema({
+  productId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Product',
+    required: true,
+    unique: true,
+    index: true
+  },
+  embedding: {
+    type: [Number],
+    required: true,
+    validate: {
+      validator: function(v) {
+        return Array.isArray(v) && v.length > 0;
+      },
+      message: 'Embedding must be a non-empty array of numbers'
+    }
+  },
+  text: {
+    type: String,
+    required: true
+  },
+  metadata: {
+    name: String,
+    category: String,
+    price: Number,
+    discount: Number,
+    image: String,
+    stock: Number,
+    description: String
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
+  }
+});
+
+// Update timestamp on save
+productEmbeddingSchema.pre('save', function(next) {
+  this.updatedAt = new Date();
+  next();
+});
+
+// Compound index for faster queries
+productEmbeddingSchema.index({ productId: 1, category: 1 });
+
+module.exports = mongoose.model('ProductEmbedding', productEmbeddingSchema);
+
+
+Routes:
+const express = require('express');
+const router = express.Router();
+const chatbotController = require('../controllers/chatbotController');
+const { protect } = require('../../middleware/authMiddleware');
+const adminAuth = require('../../middleware/adminAuthMiddleware');
+
+/**
+ * @route   POST /api/chatbot/message
+ * @desc    Send message to chatbot
+ * @access  Public (with optional auth)
+ */
+router.post('/message', chatbotController.chat);
+
+/**
+ * @route   POST /api/chatbot/message/customer
+ * @desc    Customer chatbot conversation
+ * @access  Private
+ */
+router.post('/message/customer', protect, chatbotController.customerChat);
+
+/**
+ * @route   POST /api/chatbot/message/admin
+ * @desc    Admin chatbot conversation
+ * @access  Admin
+ */
+router.post('/message/admin', protect, adminAuth, chatbotController.adminChat);
+
+/**
+ * @route   GET /api/chatbot/history/:sessionId
+ * @desc    Get chat history
+ * @access  Private
+ */
+router.get('/history/:sessionId', protect, chatbotController.getHistory);
+router.get('/session', protect, chatbotController.getLastSession);
+
+/**
+ * @route   GET /api/chatbot/context/:sessionId
+ * @desc    Get session context
+ * @access  Private
+ */
+router.get('/context/:sessionId', protect, chatbotController.getSessionContext);
+
+/**
+ * @route   POST /api/chatbot/end-session
+ * @desc    End chat session
+ * @access  Private
+ */
+router.post('/end-session', protect, chatbotController.endSession);
+
+/**
+ * @route   GET /api/chatbot/recommendations
+ * @desc    Get product recommendations
+ * @access  Public
+ */
+router.get('/recommendations', chatbotController.getRecommendations);
+
+/**
+ * @route   GET /api/chatbot/search
+ * @desc    Semantic product search
+ * @access  Public
+ */
+router.get('/search', chatbotController.searchProducts);
+
+/**
+ * @route   POST /api/chatbot/index-products
+ * @desc    Index products for semantic search
+ * @access  Private (Admin)
+ */
+router.post('/index-products', protect, adminAuth, chatbotController.indexProducts);
+
+module.exports = router;
+
+
+
+// seedProducts();
+const dotenv = require('dotenv');
+dotenv.config();
+const connectDB = require('../config/database');
+const Product = require('../models/Product');
+const vectorStore = require('../chatbot/utils/vectorStore');
+const mongoose = require('mongoose');
+
+async function seedProducts() {
+  try {
+    // Establish connections across database and vector subsystems
+    await connectDB();
+    await vectorStore.initialize();
+
+    const products = [
+      {
+        name: 'Premium Wireless Headphones',
+        description: 'High-quality wireless headphones with noise cancellation and 30-hour battery life.',
+        price: 149.99,
+        discount: 15,
+        category: 'Electronics',
+        stock: 50,
+        image: 'https://fakestoreapi.com/img/81fPKd-2AYL._AC_SL1500_.jpg'
+      },
+      {
+        name: 'Smart Fitness Tracker',
+        description: 'Track your fitness goals with this advanced smart band featuring heart rate monitor and GPS.',
+        price: 89.99,
+        discount: 10,
+        category: 'Electronics',
+        stock: 75,
+        image: 'https://fakestoreapi.com/img/71li-ujtlUL._AC_UX679_.jpg'
+      },
+      {
+        name: 'Organic Cotton T-Shirt',
+        description: 'Comfortable and sustainable t-shirt made from 100% organic cotton.',
+        price: 29.99,
+        discount: 5,
+        category: 'Clothing',
+        stock: 100,
+        image: 'https://fakestoreapi.com/img/71YXzeOuslL._AC_UY879_.jpg'
+      },
+      {
+        name: 'Stainless Steel Water Bottle',
+        description: 'Eco-friendly water bottle with double-wall insulation and leak-proof design.',
+        price: 24.99,
+        discount: 0,
+        category: 'Home & Kitchen',
+        stock: 80,
+        image: 'https://fakestoreapi.com/img/71-3HjGNDUL._AC_SY879._SX._UX._SY._UY_.jpg'
+      }
+    ];
+
+    for (const productData of products) {
+      // Check if product exists to prevent validation collisions
+      const existing = await Product.findOne({ name: productData.name });
+      
+      if (existing) {
+        console.log(`Product "${productData.name}" already exists, re-syncing configurations...`);
+        
+        // Update regular database entry
+        await Product.updateOne({ _id: existing._id }, productData);
+        
+        // Re-fetch product metadata to get combined mongoose parameters safely
+        const updatedProduct = await Product.findById(existing._id);
+        
+        // FIX: vectorStore uses indexProduct which implements updateOne/upsert natively
+        await vectorStore.indexProduct(updatedProduct);
+      } else {
+        const product = new Product(productData);
+        await product.save();
+        
+        // Pipeline vector sync for semantic search layers
+        await vectorStore.indexProduct(product);
+        console.log(`➕ Added product: ${productData.name}`);
+      }
+    }
+
+    console.log('✅ Base inventory seed and vector sync finalized successfully!');
+    await mongoose.connection.close();
+    process.exit(0);
+  } catch (error) {
+    console.error('❌ Error executing standalone seed execution sequence:', error);
+    try {
+      await mongoose.connection.close();
+    } catch (closeError) {
+      console.error('Failed to close mongoose session pool safely:', closeError);
+    }
+    process.exit(1);
+  }
+}
+
+seedProducts();
+
+
+
+
+Services:
+
+
+const ollamaService = require('./ollamaService');
+
+class EmbeddingService {
+  constructor() {
+    // Single point of configuration for the application's vector processing pipeline
+    this.vectorProvider = ollamaService;
+  }
+
+  /**
+   * Generates a single vector embedding for semantic or semantic-hybrid lookup
+   */
+  generateEmbedding = async (text) => {
+    try {
+      return await this.vectorProvider.generateEmbedding(text);
+    } catch (error) {
+      console.error('Critical execution fault under structural vector extraction sequence:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * Generates a batch collection of vector embeddings for bulk product dataset parsing
+   */
+  generateBatchEmbeddings = async (texts) => {
+    try {
+      return await this.vectorProvider.generateBatchEmbeddings(texts);
+    } catch (error) {
+      console.error('Batch vector maps compilation process failure:', error);
+      throw error;
+    }
+  };
+}
+
+module.exports = new EmbeddingService();
+
+
+const crypto = require('crypto');
+const ChatSession = require('../models/ChatSession');
+const ChatMessage = require('../models/ChatMessage');
+
+class MemoryService {
+  /**
+   * Create or get chat session
+   */
+  getOrCreateSession = async (userId, sessionId = null) => {
+    try {
+      if (sessionId) {
+        let session = await ChatSession.findOne({ sessionId });
+
+        if (session) {
+          session.lastActivity = new Date();
+          session.active = true;
+          if (!session.userId) session.userId = userId;
+          await session.save();
+          return session;
+        }
+      }
+
+      let created = null;
+      let attempts = 0;
+      while (!created && attempts < 3) {
+        attempts += 1;
+        const newSession = new ChatSession({
+          userId,
+          sessionId: sessionId || this.generateSessionId(),
+          lastActivity: new Date()
+        });
+
+        try {
+          created = await newSession.save();
+        } catch (error) {
+          if (error.code === 11000 && error.keyPattern?.sessionId && !sessionId) {
+            continue;
+          }
+          throw error;
+        }
+      }
+
+      if (!created) {
+        throw new Error('Unable to create a unique chat session.');
+      }
+
+      return created;
+    } catch (error) {
+      console.error('Error getting/creating session:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * Generate unique session ID token
+   */
+  generateSessionId = () => {
+    return `session_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
+  };
+
+  /**
+   * Save message to memory with explicit intent guard rails
+   */
+  saveMessage = async (sessionId, userId, role, content, intent = null, entities = null, metadata = null) => {
+    try {
+      const validIntents = [
+        'general', 'order_tracking', 'order_history', 'order_stats', 
+        'product_search', 'recommendation', 'support', 'feedback', 
+        'greeting', 'unknown'
+      ];
+      const safeIntent = intent && validIntents.includes(intent) ? intent : 'general';
+
+      const message = new ChatMessage({
+        sessionId,
+        userId,
+        role,
+        content,
+        intent: safeIntent,
+        entities: entities || {},
+        metadata: metadata || {},
+        vectorized: false
+      });
+      await message.save();
+
+      // Update session metrics parameters atomically
+      await ChatSession.findOneAndUpdate(
+        { sessionId },
+        { 
+          lastActivity: new Date(),
+          $inc: { messageCount: 1 }
+        }
+      );
+      return message;
+    } catch (error) {
+      console.error('Critical execution fault saving runtime dialogue packet:', error);
+      return null;
+    }
+  };
+
+  /**
+   * Get historical chat tracking arrays
+   */
+  getChatHistory = async (sessionId, limit = 20) => {
+    try {
+      const messages = await ChatMessage.find({ sessionId })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .lean();
+      return messages.reverse();
+    } catch (error) {
+      console.error('Error getting chat history array:', error);
+      return [];
+    }
+  };
+
+  /**
+   * Get recent messages trimmed slice maps for local LLM injection
+   */
+  getRecentMessages = async (sessionId, limit = 10) => {
+    try {
+      const messages = await ChatMessage.find({ sessionId })
+        .sort({ createdAt: -1 })
+        .limit(limit)
+        .select('role content createdAt')
+        .lean();
+      return messages.reverse();
+    } catch (error) {
+      console.error('Error compiling recent contextual sequences maps:', error);
+      return [];
+    }
+  };
+
+  /**
+   * Summarize conversation based on lexical distribution tracking
+   */
+  summarizeConversation = async (sessionId) => {
+    try {
+      const messages = await this.getChatHistory(sessionId, 30);
+      if (messages.length === 0) return '';
+      
+      const topics = [];
+      const stopWords = ['please', 'thank', 'would', 'could', 'should', 'about', 'there'];
+      
+      for (const msg of messages) {
+        if (msg.role === 'user') {
+          const words = msg.content.toLowerCase().split(/\s+/);
+          for (const word of words) {
+            const cleanWord = word.replace(/[^a-zA-Z]/g, '');
+            if (cleanWord.length > 5 && !stopWords.includes(cleanWord)) {
+              topics.push(cleanWord);
+            }
+          }
+        }
+      }
+      
+      const uniqueTopics = [...new Set(topics)].slice(0, 10);
+      const generatedSummary = uniqueTopics.length > 0 
+        ? `Conversation focused on parameters: ${uniqueTopics.join(', ')}`
+        : 'General support inquiry session context';
+
+      await ChatSession.findOneAndUpdate(
+        { sessionId },
+        { 
+          summary: generatedSummary,
+          keyTopics: uniqueTopics
+        }
+      );
+      
+      return { topics: uniqueTopics, summary: generatedSummary };
+    } catch (error) {
+      console.error('Telemetry compilation warning under summarizer scope:', error);
+      return { topics: [], summary: '' };
+    }
+  };
+
+  /**
+   * Clean up stale/inactive cold records
+   */
+  cleanupOldSessions = async (days = 7) => {
+    try {
+      const cutoffDate = new Date();
+      cutoffDate.setDate(cutoffDate.getDate() - days);
+      
+      const result = await ChatSession.deleteMany({
+        lastActivity: { $lt: cutoffDate },
+        active: false
+      });
+      console.log(`🧹 Memory Engine Sweep completed: purged ${result.deletedCount} defunct historical sessions.`);
+      return result;
+    } catch (error) {
+      console.error('Purging runtime execution maps failed safely:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * Fetch absolute session state mapping bundles
+   */
+  getSessionContext = async (sessionId) => {
+    try {
+      const session = await ChatSession.findOne({ sessionId });
+      if (!session) return {};
+      
+      const recentMessages = await this.getRecentMessages(sessionId, 5);
+      return {
+        session: {
+          id: session.sessionId,
+          summary: session.summary,
+          keyTopics: session.keyTopics,
+          sentiment: session.sentiment,
+          lastActivity: session.lastActivity
+        },
+        recentMessages
+      };
+    } catch (error) {
+      console.error('Error fetching structural pipeline context packets:', error);
+      return {};
+    }
+  };
+
+  getLastSession = async (userId) => {
+    try {
+      if (!userId) return null;
+      const session = await ChatSession.findOne({ userId })
+        .sort({ lastActivity: -1 })
+        .lean();
+      return session;
+    } catch (error) {
+      console.error('Error finding last chat session:', error);
+      return null;
+    }
+  };
+
+  /**
+   * Inject sentiment analysis updates
+   */
+  updateSentiment = async (sessionId, sentiment) => {
+    try {
+      await ChatSession.findOneAndUpdate({ sessionId }, { sentiment });
+    } catch (error) {
+      console.error('Failed to update session telemetry sentiment vector index:', error);
+    }
+  };
+
+  /**
+   * Finalize and seal active interactive execution workflows
+   */
+  endSession = async (sessionId) => {
+    try {
+      await ChatSession.findOneAndUpdate(
+        { sessionId },
+        { 
+          active: false,
+          updatedAt: new Date()
+        }
+      );
+      
+      // Compute final analytics tracking maps seamlessly before lifecycle suspension
+      await this.summarizeConversation(sessionId);
+    } catch (error) {
+      console.error('Error sealing workflow pipeline lifecycle gracefully:', error);
+    }
+  };
+}
+
+module.exports = new MemoryService();
+
+
+
+
+require('dotenv').config();
+const { ChatOllama, OllamaEmbeddings } = require('@langchain/ollama');
+const { createLocalEmbedding } = require('../utils/fallbackUtils');
+
+class OllamaService {
+  constructor() {
+    this.chatModelName = process.env.OLLAMA_MODEL || process.env.CHATBOT_MODEL || 'qwen2.5:0.5b';
+    this.embeddingModelName = process.env.OLLAMA_EMBEDDING_MODEL || 'nomic-embed-text';
+    this.baseUrl = process.env.OLLAMA_BASE_URL || 'http://localhost:11434';
+    this.fallbackMode = String(process.env.CHATBOT_FALLBACK_MODE || 'true').toLowerCase() === 'true';
+    
+    this.chatFallbackNotified = false;
+    this.ollamaAvailable = null;
+    this.lastError = null;
+    this.availableModels = [];
+
+    // Initialize LangChain Ollama Embeddings class wrapper
+    this.embeddings = new OllamaEmbeddings({
+      model: this.embeddingModelName,
+      baseUrl: this.baseUrl
+    });
+
+    this.initializeAvailability().catch((error) => {
+      this.lastError = error;
+      this.ollamaAvailable = false;
+      console.warn('⚠️ Ollama is not reachable yet; chatbot will use fallback responses for now.');
+    });
+  }
+
+  initializeAvailability = async () => {
+    this.ollamaAvailable = await this.checkOllamaAvailability();
+    if (this.ollamaAvailable) {
+      console.log(`✅ Ollama ready: chat=${this.chatModelName}, embeddings=${this.embeddingModelName}`);
+    } else {
+      console.warn(`⚠️ Ollama service is unavailable at ${this.baseUrl}.`);
+    }
+  };
+
+  checkOllamaAvailability = async () => {
+    try {
+      const response = await fetch(`${this.baseUrl}/api/tags`, { 
+        method: 'GET',
+        headers: { 'Accept': 'application/json' }
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Ollama health check returned HTTP status ${response.status}`);
+      }
+      
+      const payload = await response.json();
+      this.availableModels = Array.isArray(payload?.models) 
+        ? payload.models.map((model) => model?.name || model?.model || '') 
+        : [];
+        
+      return true;
+    } catch (error) {
+      this.lastError = error;
+      return false;
+    }
+  };
+
+  buildPrompt = (messages) => {
+    const promptLines = (messages || [])
+      .map((message) => {
+        const role = String(message.role || 'user').toUpperCase();
+        const content = String(message.content || '').trim();
+        return content ? `${role}: ${content}` : null;
+      })
+      .filter(Boolean);
+      
+    return `${promptLines.join('\n')}\nASSISTANT:`;
+  };
+
+  createFallbackChatResponse = (messages, options = {}) => {
+    const lastUserMessage = (messages || [])
+      .slice()
+      .reverse()
+      .find((message) => (message.role || 'user').toLowerCase() === 'user');
+      
+    const prompt = String(lastUserMessage?.content || 'How can I help you today?').trim();
+
+    if (prompt.length === 0) {
+      return 'Hello! I can help with product recommendations, orders, and support.';
+    }
+    if (/product|buy|shop|recommend|look for|find/i.test(prompt)) {
+      return `I can help you browse products. I’m currently using a local fallback response because Ollama is unavailable, but I can still guide you toward relevant items for "${prompt}".`;
+    }
+    if (/order|delivery|track/i.test(prompt)) {
+      return 'I can help with order status. Please share your order ID or email so I can guide you further.';
+    }
+    
+    return `Thanks for your message: "${prompt}". I’m currently using a local fallback response while Ollama is offline. Please ensure Ollama is running locally.`;
+  };
+
+  normalizeEmbedding = (embedding) => {
+    let values = [];
+    if (Array.isArray(embedding)) {
+      values = embedding;
+    } else if (embedding && Array.isArray(embedding.data)) {
+      values = embedding.data;
+    }
+    return this.ensureEmbeddingDimensions(values);
+  };
+
+  ensureEmbeddingDimensions = (values, dimensions = 384) => {
+    if (!Array.isArray(values)) return Array(dimensions).fill(0);
+    
+    const numbers = values.filter((value) => typeof value === 'number' && Number.isFinite(value));
+    if (numbers.length === 0) return Array(dimensions).fill(0);
+    if (numbers.length === dimensions) return numbers;
+    
+    if (numbers.length > dimensions) {
+      return numbers.slice(0, dimensions);
+    }
+    
+    const padded = [...numbers];
+    while (padded.length < dimensions) {
+      padded.push(0);
+    }
+    return padded;
+  };
+
+  generateChatCompletion = async (messages, options = {}) => {
+    try {
+      const formattedMessages = (messages || []).map((message) => ({
+        role: message.role === 'assistant' ? 'assistant' : message.role === 'system' ? 'system' : 'user',
+        content: String(message.content || '')
+      }));
+
+      if (!this.ollamaAvailable && this.fallbackMode) {
+        if (!this.chatFallbackNotified) {
+          console.info('ℹ️ Ollama chat provider is offline; routing through local fallback matching architecture.');
+          this.chatFallbackNotified = true;
+        }
+        return {
+          choices: [{
+            message: { content: this.createFallbackChatResponse(formattedMessages, options) }
+          }]
+        };
+      }
+
+      if (this.ollamaAvailable === false && !this.fallbackMode) {
+        throw new Error(`Ollama engine unreachable state verified at ${this.baseUrl}`);
+      }
+
+      const prompt = this.buildPrompt(formattedMessages);
+      const llm = new ChatOllama({
+        model: this.chatModelName,
+        baseUrl: this.baseUrl,
+        temperature: options.temperature ?? 0.7,
+        numCtx: options.numCtx ?? 2048,
+        numPredict: options.maxTokens ?? 512,
+        topP: options.topP ?? 0.95
+      });
+
+      const response = await llm.invoke(prompt);
+      const content = typeof response?.content === 'string'
+        ? response.content
+        : String(response?.content || response || '');
+
+      return {
+        choices: [{
+          message: { content: content.trim() }
+        }]
+      };
+    } catch (error) {
+      this.lastError = error;
+      if (!this.fallbackMode) throw error;
+
+      if (!this.chatFallbackNotified) {
+        console.info('ℹ️ Ollama chat provider runtime exception thrown; switching to local execution context pipelines.');
+        this.chatFallbackNotified = true;
+      }
+      
+      return {
+        choices: [{
+          message: { content: this.createFallbackChatResponse(messages, options) }
+        }]
+      };
+    }
+  };
+
+  generateEmbedding = async (text) => {
+    try {
+      if (!this.ollamaAvailable) {
+        return createLocalEmbedding(text);
+      }
+      const embedding = await this.embeddings.embedQuery(String(text || ''));
+      return this.normalizeEmbedding(embedding);
+    } catch (error) {
+      this.lastError = error;
+      if (this.fallbackMode) {
+        return createLocalEmbedding(text);
+      }
+      console.error('Embedding generation runtime crash:', error);
+      throw error;
+    }
+  };
+
+  generateBatchEmbeddings = async (texts) => {
+    try {
+      if (!this.ollamaAvailable) {
+        return (texts || []).map((item) => createLocalEmbedding(item));
+      }
+      const rawEmbeddings = await this.embeddings.embedDocuments((texts || []).map((item) => String(item || '')));
+      return (rawEmbeddings || []).map((embedding) => this.normalizeEmbedding(embedding));
+    } catch (error) {
+      this.lastError = error;
+      if (this.fallbackMode) {
+        return (texts || []).map((item) => createLocalEmbedding(item));
+      }
+      console.error('Batch vector maps compiling failure:', error);
+      throw error;
+    }
+  };
+}
+
+module.exports = new OllamaService();
+
+
+
+
+
+const ollamaService = require('./ollamaService');
+const vectorStore = require('../utils/vectorStore');
+const Product = require('../../models/Product');
+const Feedback = require('../../models/Feedback');
+const mongoose = require('mongoose');
+
+class RAGService {
+  constructor() {
+    this.ollamaService = ollamaService;
+  }
+
+  isGenericCatalogRequest = (message) => {
+    const lowerMessage = String(message || '').toLowerCase();
+    return /all products|list all products|show all products|browse( the)? catalog|catalog.*products|products.*catalog|store in database|mongodb atlas|database mongodb/i.test(lowerMessage);
+  };
+
+  /**
+   * Search products by keywords with relative relevance scoring
+   */
+  searchProductsByKeywords = async (query, allProducts, limit = 5) => {
+    if (!query || allProducts.length === 0) return [];
+    
+    const keywords = query.toLowerCase().split(/\s+/).filter(k => k.length > 2);
+    
+    const scored = allProducts.map(product => {
+      let score = 0;
+      const nameStr = (product.name || '').toLowerCase();
+      const descStr = (product.description || '').toLowerCase();
+      const catStr = (product.category || '').toLowerCase();
+      
+      keywords.forEach(keyword => {
+        if (nameStr.includes(keyword)) score += 10;
+        if (nameStr.startsWith(keyword)) score += 5;
+        if (descStr.includes(keyword)) score += 5;
+        if (catStr.includes(keyword)) score += 3;
+      });
+      
+      return { product, score };
+    });
+    
+    return scored
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map(item => item.product);
+  };
+
+  extractProductQuery = (message) => {
+    const text = String(message || '');
+    const patterns = [
+      /(?:find|search for|looking for|need a|need an|want a|want an|give me details of|details of|show details of|show me details of|tell me about|about)\s+(.+?)(?:\s+products?|\s+product|\?|\.|!|$)/i,
+      /(?:give this product|product) details?\s+(.+?)(?:\?|\.|!|$)/i,
+      /(.+?)\s+products?\s*\??$/i
+    ];
+    
+    for (const pattern of patterns) {
+      const match = text.match(pattern);
+      if (match && match[1]) {
+        return match[1].trim();
+      }
+    }
+    return '';
+  };
+
+  getProductPageUrl = (product) => {
+    const id = product._id?.toString() || product.id?.toString();
+    const frontendUrl = String(process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/$/, '');
+    return id ? `${frontendUrl}/product/${id}` : null;
+  };
+
+  buildProductSummary = (product) => {
+    const discountedPrice = product.discount > 0
+      ? (product.price - (product.price * (product.discount / 100))).toFixed(2)
+      : product.price.toFixed(2);
+    
+    return {
+      id: product._id?.toString() || product.id?.toString() || null,
+      name: product.name,
+      category: product.category || 'General',
+      price: product.price,
+      discountedPrice,
+      discount: product.discount || 0,
+      stock: typeof product.stock === 'number' ? product.stock : null,
+      image: product.image || null,
+      description: product.description || null,
+      pageUrl: this.getProductPageUrl(product)
+    };
+  };
+
+  buildCatalogGroundedResponse = (userMessage, context = {}, entities = {}, userInfo = null) => {
+    const query = String(userMessage || '').trim();
+    const products = Array.isArray(context?.products) ? context.products : [];
+    const isCatalogRequest = this.isGenericCatalogRequest(userMessage);
+    const categoryRegex = entities.category ? new RegExp(entities.category, 'i') : null;
+    const priceLimit = entities.priceRange || null;
+
+    if (!query) {
+      return { text: 'How can I assist you today?', product: null, products: [] };
+    }
+
+    // If no direct product matches were found, provide a clearer fallback for
+    // explicit product-type queries (e.g., "headphone"). For generic queries
+    // keep the broader guidance to try different terms or browse the catalog.
+    if (products.length === 0) {
+      const explicitProductKeywords = /headphone|headphones|earbuds|speaker|laptop|phone|camera|monitor|tablet|charger|keyboard|mouse|tv|television/i;
+      if (explicitProductKeywords.test(query)) {
+        return {
+          text: `I couldn't find any matching items in the store for "${query}". It looks like that product isn't available right now — it may arrive in the future.`,
+          product: null,
+          products: []
+        };
+      }
+
+      return {
+        text: `I couldn't find any matching items in the store for "${query}". Try different terms or type "all products" to browse the catalog.`,
+        product: null,
+        products: []
+      };
+    }
+
+    const matchingProducts = products.filter(product => {
+      const categoryMatch = categoryRegex ? categoryRegex.test(product.category || '') : true;
+      const priceMatch = priceLimit != null ? product.price <= priceLimit : true;
+      return categoryMatch && priceMatch;
+    });
+
+    const chosenProducts = matchingProducts.length > 0 ? matchingProducts : products;
+
+    if (isCatalogRequest) {
+      const productList = chosenProducts.slice(0, 5).map((product, index) => {
+        const summary = this.buildProductSummary(product);
+        return `${index + 1}. ${summary.name} - $${summary.discountedPrice} (${summary.category})`;
+      }).join('\n');
+
+      return {
+        text: `Here are some products available in our store:\n${productList}`,
+        product: null,
+        products: chosenProducts.slice(0, 5).map(p => this.buildProductSummary(p))
+      };
+    }
+
+    const product = chosenProducts[0];
+    const productSummary = this.buildProductSummary(product);
+    const discountText = productSummary.discount > 0 ? `Discount: ${productSummary.discount}% off. ` : '';
+    const stockText = productSummary.stock !== null ? `Stock available: ${productSummary.stock}. ` : '';
+    const pageText = productSummary.pageUrl ? 'You can open the product details page using the link below.' : '';
+
+    return {
+      text: `I found a matching product: ${productSummary.name}. Category: ${productSummary.category}. Price: $${productSummary.discountedPrice}. ${discountText}${stockText}${pageText}`.trim(),
+      product: productSummary,
+      products: [productSummary]
+    };
+  };
+
+  buildSystemPrompt = (context, userInfo = null) => {
+    let prompt = `You are an expert AI customer support agent for our e-commerce platform. Assist customers with:
+1. Product specifications, configurations, and inventory status
+2. Direct tracking updates and payment flow logs
+3. Cross-selling or hybrid catalog recommendations
+4. General technical or business support questions\n`;
+
+    if (context.products && context.products.length > 0) {
+      prompt += '\n📦 **Live Inventory Context:**\n';
+      context.products.forEach((product, index) => {
+        const summary = this.buildProductSummary(product);
+        prompt += `${index + 1}. ${summary.name} - $${summary.discountedPrice} (${summary.category})\n`;
+        if (summary.description) {
+          prompt += `   Context: ${summary.description.substring(0, 100)}...\n`;
+        }
+      });
+    }
+
+    if (context.orders && context.orders.length > 0) {
+      prompt += '\n📊 **Recent Orders History Context:**\n';
+      context.orders.forEach((order, index) => {
+        prompt += `${index + 1}. Order Reference #${order._id} - Status: ${order.orderStatus.toUpperCase()} - Final Amount: $${order.totalAmount}\n`;
+      });
+    }
+
+    if (userInfo) {
+      prompt += `\n👤 **Customer Account Profile:**\n- Name: ${userInfo.name || 'Guest'}\n- Email: ${userInfo.email || 'Anonymous'}\n`;
+    }
+
+    prompt += `\n**Core Guidelines:**
+1. Be ultra-professional, friendly, and structured.
+2. Ground arguments strictly in provided data records.
+3. If specific order info is missing, politely query for an Order Reference Token.
+4. Keep interactions context-driven and lightning-fast.`;
+    return prompt;
+  };
+
+  async getRecommendationsForUser(userId, orders, availableProducts) {
+    try {
+      const purchasedCategories = new Set();
+      const purchasedProductIds = new Set();
+      
+      if (orders && orders.length > 0) {
+        orders.forEach(order => {
+          if (order.products) {
+            order.products.forEach(item => {
+              if (item.productId) {
+                const idStr = item.productId?._id?.toString() || item.productId;
+                purchasedProductIds.add(idStr);
+                if (item.productId?.category) {
+                  purchasedCategories.add(item.productId.category);
+                }
+              }
+            });
+          }
+        });
+      }
+      
+      let recommendedProducts = [];
+      if (purchasedCategories.size > 0) {
+        recommendedProducts = await Product.find({
+          category: { $in: Array.from(purchasedCategories) },
+          _id: { $nin: Array.from(purchasedProductIds) }
+        })
+        .sort({ createdAt: -1, discount: -1 })
+        .limit(5);
+      }
+      
+      if (recommendedProducts.length < 5) {
+        const additional = await Product.find({
+          _id: { $nin: Array.from(purchasedProductIds) }
+        })
+        .sort({ discount: -1, createdAt: -1 })
+        .limit(5 - recommendedProducts.length);
+        recommendedProducts = [...recommendedProducts, ...additional];
+      }
+      
+      const formattedProducts = recommendedProducts.map(p => this.buildProductSummary(p));
+      let responseText = '✨ Based on your shopping history, here are tailored suggestions for you:\n\n';
+      
+      formattedProducts.forEach((product, index) => {
+        const badge = product.discount > 0 ? `🔥 ${product.discount}% OFF` : '';
+        responseText += `${index + 1}. **${product.name}** - $${product.discountedPrice} ${badge}\n   Category: ${product.category}\n\n`;
+      });
+      
+      return { text: responseText.trim(), products: formattedProducts };
+    } catch (error) {
+      console.error('Error compiling smart recommendations:', error);
+      return { text: "Check out our catalog to find fresh trending gear!", products: [] };
+    }
+  }
+
+  normalizeProductCandidate = async (candidate) => {
+    if (!candidate) return null;
+    if (typeof candidate === 'string' || mongoose.Types.ObjectId.isValid(candidate)) {
+      return await Product.findById(candidate);
+    }
+
+    if (candidate._id) {
+      const resolved = await Product.findById(candidate._id);
+      return resolved || candidate;
+    }
+
+    if (candidate.id) {
+      const resolved = await Product.findById(candidate.id);
+      return resolved || candidate;
+    }
+
+    if (candidate.name) {
+      const regex = new RegExp(`^${candidate.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i');
+      return await Product.findOne({ name: regex }) || candidate;
+    }
+
+    return null;
+  };
+
+  getProductFeedback = async (userId, context = {}, userMessage = '') => {
+    try {
+      let product = null;
+      let productCandidates = Array.isArray(context.products) ? context.products : [];
+
+      if (productCandidates.length > 0) {
+        product = await this.normalizeProductCandidate(productCandidates[0]);
+      }
+
+      if (!product && context.orders && context.orders.length > 0) {
+        const latestOrder = context.orders[0];
+        const firstItem = latestOrder.products && latestOrder.products[0];
+        if (firstItem && firstItem.productId) {
+          product = await this.normalizeProductCandidate(firstItem.productId);
+        }
+      }
+
+      if (!product && userId && userId !== 'guest') {
+        const latestFeedback = await Feedback.findOne({ userId }).sort({ createdAt: -1 }).populate('productId');
+        if (latestFeedback?.productId) {
+          product = await this.normalizeProductCandidate(latestFeedback.productId);
+        }
+      }
+
+      if (!product) {
+        const productQuery = this.extractProductQuery(userMessage);
+        if (productQuery) {
+          product = await Product.findOne({
+            $or: [
+              { name: new RegExp(productQuery, 'i') },
+              { description: new RegExp(productQuery, 'i') },
+              { category: new RegExp(productQuery, 'i') }
+            ]
+          });
+        }
+      }
+
+      if (!product) {
+        return {
+          text: 'I could not identify a specific product to show feedback for. Please ask about a specific product name or provide your last order details.',
+          product: null,
+          products: [],
+          feedback: []
+        };
+      }
+
+      const feedbackDocs = await Feedback.find({ productId: product._id }).sort({ createdAt: -1 }).limit(3).populate('userId', 'name');
+      const productSummary = this.buildProductSummary(product);
+
+      if (!feedbackDocs.length) {
+        return {
+          text: `There is no posted feedback yet for ${productSummary.name}. Ask again when customers have reviewed it, or try another product.`,
+          product: productSummary,
+          products: [productSummary],
+          feedback: []
+        };
+      }
+
+      let text = `Feedback for ${productSummary.name} (${productSummary.category}):\n`;
+      feedbackDocs.forEach((fb, index) => {
+        const reviewer = fb.userId?.name || 'Anonymous';
+        const rating = fb.rating || 'N/A';
+        const comment = fb.comment ? fb.comment.trim() : 'No comment provided.';
+        text += `\n${index + 1}. ${reviewer} rated it ${rating}/5\n   “${comment}”\n`;
+      });
+
+      return {
+        text: text.trim(),
+        product: productSummary,
+        products: [productSummary],
+        feedback: feedbackDocs
+      };
+    } catch (error) {
+      console.error('Error retrieving product feedback:', error);
+      return {
+        text: 'I had trouble fetching feedback details right now. Please try again later.',
+        product: null,
+        products: [],
+        feedback: []
+      };
+    }
+  }
+
+  buildOrderHistoryResponse = (orders) => {
+    if (!orders || orders.length === 0) {
+      return { text: "No transactional records tracked yet. Let's make your first purchase!", formattedOrders: [] };
+    }
+    
+    const formattedOrders = orders.map(order => ({
+      _id: order._id.toString(),
+      createdAt: order.createdAt,
+      totalAmount: order.totalAmount,
+      paymentStatus: order.paymentStatus,
+      orderStatus: order.orderStatus,
+      products: order.products.map(item => ({
+        productId: item.productId?._id?.toString() || item.productId,
+        quantity: item.quantity,
+        price: item.price
+      })),
+      deliveryAddress: order.deliveryAddress
+    }));
+    
+    let responseText = `📂 Verified Account History (${orders.length} active record${orders.length !== 1 ? 's' : ''}):\n\n`;
+    orders.forEach((order, index) => {
+      const date = new Date(order.createdAt).toLocaleDateString();
+      const pBadge = order.paymentStatus === 'success' ? '✅' : '⏳';
+      const sBadge = order.orderStatus === 'delivered' ? '📦' : '🚚';
+      
+      responseText += `${index + 1}. **Order ID: #${order._id.toString().substring(0, 8)}...**\n`;
+      responseText += `   📅 Date: ${date} | ${pBadge} Payment: ${order.paymentStatus.toUpperCase()}\n`;
+      responseText += `   ${sBadge} Logistics Status: ${order.orderStatus.toUpperCase()} | Total: $${order.totalAmount.toFixed(2)}\n\n`;
+    });
+    
+    return { text: responseText.trim(), formattedOrders };
+  };
+
+  getOrderStats = async (userId, orders) => {
+    if (!userId || !orders || orders.length === 0) {
+      return { text: "No telemetry metrics data for empty orders profiles.", stats: {} };
+    }
+    
+    const stats = { total: orders.length, pending: 0, processing: 0, shipped: 0, delivered: 0, cancelled: 0 };
+    orders.forEach(order => {
+      const status = order.orderStatus?.toLowerCase() || 'unknown';
+      if (stats[status] !== undefined) stats[status]++;
+    });
+    
+    let text = '📈 **Your Order Processing Metrics Summary:**\n\n';
+    text += `🔹 Total Purchases Placed: ${stats.total}\n`;
+    text += `🔹 Processing State: ${stats.processing} | Shipped: ${stats.shipped}\n`;
+    text += `🔹 Fulfilled/Delivered: ${stats.delivered} | Cancelled: ${stats.cancelled}\n`;
+    return { text, stats };
+  };
+
+  /**
+   * Primary entrypoint orchestration lifecycle hook
+   */
+  generateResponse = async (userMessage, userId = null, sessionId = null, chatHistory = []) => {
+    try {
+      const entities = this.extractEntities(userMessage);
+      const context = await this.getRelevantContext(userMessage, userId, 5, entities);
+      
+      let userInfo = null;
+      if (userId && userId !== 'guest') {
+        try {
+          const User = require('../../models/User');
+          const user = await User.findById(userId);
+          if (user) userInfo = { name: user.name, email: user.email, role: user.role };
+        } catch (err) {
+          console.error('User reference parsing failed safely:', err);
+        }
+      }
+      
+      const intent = this.detectIntent(userMessage);
+      const isProductQuery = intent === 'product_search' || this.isGenericCatalogRequest(userMessage) || /product|headphone|headphones|laptop|phone|speaker|earbuds|outfit|dress|suit|shirt|jacket|pants|shorts|summer|wedding|clothing|apparel/i.test(userMessage) || entities.productId || entities.category;
+      
+      if (intent === 'recommendation') {
+        const recs = await this.getRecommendationsForUser(userId, context.orders, context.products);
+        return {
+          response: recs.text,
+          intent,
+          entities,
+          context: { products: recs.products || [], orders: context.orders || [] },
+          products: recs.products || [],
+          processingTime: 0,
+          model: this.ollamaService.chatModelName
+        };
+      }
+      
+      if (isProductQuery) {
+        const catalogReply = this.buildCatalogGroundedResponse(userMessage, context, entities, userInfo);
+        return {
+          response: catalogReply.text,
+          intent,
+          entities,
+          context: { products: context.products || [], orders: context.orders || [] },
+          productMeta: catalogReply.product,
+          products: catalogReply.products || [],
+          processingTime: 0,
+          model: this.ollamaService.chatModelName
+        };
+      }
+      
+      if (intent === 'order_stats') {
+        const statsRes = await this.getOrderStats(userId, context.orders);
+        return {
+          response: statsRes.text,
+          intent,
+          entities,
+          context: { products: [], orders: context.orders || [] },
+          stats: statsRes.stats,
+          processingTime: 0,
+          model: this.ollamaService.chatModelName
+        };
+      }
+      
+      if (intent === 'order_history') {
+        const histRes = this.buildOrderHistoryResponse(context.orders);
+        return {
+          response: histRes.text,
+          intent,
+          entities,
+          context: { products: [], orders: context.orders || [] },
+          orders: histRes.formattedOrders || [],
+          processingTime: 0,
+          model: this.ollamaService.chatModelName
+        };
+      }
+
+      if (intent === 'feedback') {
+        const feedbackRes = await this.getProductFeedback(userId, context, userMessage);
+        return {
+          response: feedbackRes.text,
+          intent,
+          entities,
+          context: {
+            products: feedbackRes.products || context.products || [],
+            orders: context.orders || []
+          },
+          productMeta: feedbackRes.product || null,
+          products: feedbackRes.products || [],
+          feedback: feedbackRes.feedback || [],
+          processingTime: 0,
+          model: this.ollamaService.chatModelName
+        };
+      }
+      
+      // Execute standard generative fallback loop through Ollama service
+      const systemPrompt = this.buildSystemPrompt(context, userInfo);
+      let formattedMessages = [{ role: 'system', content: systemPrompt }];
+      
+      if (chatHistory && chatHistory.length > 0) {
+        chatHistory.slice(-10).forEach(msg => {
+          formattedMessages.push({ role: msg.role === 'user' ? 'user' : 'assistant', content: msg.content });
+        });
+      }
+      formattedMessages.push({ role: 'user', content: userMessage });
+      
+      const startTime = Date.now();
+      const result = await this.ollamaService.generateChatCompletion(formattedMessages, {
+        temperature: 0.7,
+        maxTokens: 2048,
+        topP: 0.95
+      });
+      const processingTime = Date.now() - startTime;
+      
+      const aiResponse = result.choices?.[0]?.message?.content || result.generated_text || 'Acknowledged, let me know if you need specific details.';
+      
+      return {
+        response: aiResponse,
+        intent,
+        entities,
+        context: { products: context.products || [], orders: context.orders || [] },
+        processingTime,
+        model: this.ollamaService.chatModelName
+      };
+    } catch (error) {
+      console.error('Critical failure in core RAG orchestration pipeline:', error);
+      return {
+        response: "I'm having trouble retrieving that information right now. Please reload the interface or check back in a few moments.",
+        intent: 'general',
+        entities: {},
+        context: { products: [], orders: [] },
+        error: error.message
+      };
+    }
+  };
+
+  async getRelevantContext(query, userId = null, limit = 5, entities = {}) {
+    try {
+      if (mongoose.connection.readyState !== 1) {
+        await mongoose.connect(process.env.MONGODB_URI);
+      }
+      
+      const isCatalogRequest = this.isGenericCatalogRequest(query);
+      const productQuery = this.extractProductQuery(query) || String(query || '').trim();
+      let products = [];
+      
+      if (entities?.productId) {
+        if (mongoose.Types.ObjectId.isValid(entities.productId)) {
+          const product = await Product.findById(entities.productId);
+          if (product) products = [product];
+        }
+        
+        if (products.length === 0) {
+          const all = await Product.find({});
+          const matched = all.find(p => p._id.toString().startsWith(entities.productId.toLowerCase()));
+          if (matched) products = [matched];
+        }
+      }
+      
+      if (products.length === 0) {
+        if (isCatalogRequest) {
+          products = await Product.find({}).sort({ createdAt: -1 }).limit(limit);
+        } else if (productQuery) {
+          const escaped = productQuery.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+          const regex = new RegExp(escaped, 'i');
+          
+          products = await Product.find({
+            $or: [{ name: regex }, { description: regex }, { category: regex }]
+          }).sort({ createdAt: -1 }).limit(limit);
+          
+          if (products.length === 0) {
+            const all = await Product.find({});
+            products = await this.searchProductsByKeywords(productQuery, all, limit);
+          }
+          if (products.length === 0) {
+            const explicitProductKeywords = /headphone|headphones|earbuds|speaker|laptop|phone|camera|monitor|tablet|charger|keyboard|mouse|tv|television/i;
+            if (explicitProductKeywords.test(productQuery)) {
+              // If the user asked for a clear product type (e.g., "headphone") and
+              // no exact or keyword matches were found, avoid returning semantically
+              // similar but unrelated items from the vector store. Leave products
+              // empty so the controller can show an appropriate "not available" message.
+              products = [];
+            } else {
+              products = await vectorStore.searchSimilarProducts(productQuery, limit);
+            }
+          }
+        }
+      }
+      
+      let orders = [];
+      if (userId && userId !== 'guest') {
+        const Order = require('../../models/Order');
+        orders = await Order.find({ userId }).sort({ createdAt: -1 }).limit(50).populate('products.productId');
+      }
+      
+      return { products, orders };
+    } catch (error) {
+      console.error('Error compounding context maps extraction:', error);
+      return { products: [], orders: [] };
+    }
+  }
+
+  detectIntent(message) {
+    const lowerMessage = message.toLowerCase();
+    
+    const recPatterns = ['recommend', 'suggest', 'what should i buy', 'best', 'top rated', 'mostly like', 'prefer', 'favorite', 'product i like', 'which product', 'what product', 'similar', 'comparable', 'alternatives', 'like these', 'like this', 'similar to', 'what else', 'anything like'];
+    for (const pattern of recPatterns) {
+      if (lowerMessage.includes(pattern)) return 'recommendation';
+    }
+    
+    const intentPatterns = {
+      order_stats: ['how many orders', 'order count', 'pending orders', 'shipped orders', 'order statistics', 'order summary', 'my order stats'],
+      order_history: ['order history', 'my orders', 'last order', 'recent orders', 'all orders', 'view orders', 'show my orders', 'record of my order'],
+      order_tracking: ['track order', 'where is my order', 'order status', 'delivery', 'shipment', 'track my order', 'order id'],
+      product_search: ['find product', 'search for', 'looking for', 'need a', 'want to buy', 'product id', 'show me product', 'find me', 'search product', 'give me details', 'details of', 'show details', 'tell me about', 'product details'],
+      support: ['help', 'support', 'problem', 'issue', 'not working'],
+      feedback: ['feedback', 'review', 'suggestion']
+    };
+    
+    for (const [intent, patterns] of Object.entries(intentPatterns)) {
+      for (const pattern of patterns) {
+        if (lowerMessage.includes(pattern)) return intent;
+      }
+    }
+    return 'general';
+  }
+
+  extractEntities(message) {
+    const entities = {};
+    const lowerMessage = message.toLowerCase();
+    
+    const orderIdMatch = lowerMessage.match(/order\s*(?:#|id)?\s*:?\s*([a-f0-9]{24}|[a-f0-9]{8,})/i);
+    if (orderIdMatch) entities.orderId = orderIdMatch[1];
+    
+    const productIdMatch = lowerMessage.match(/product\s*(?:id)?\s*:?\s*([a-f0-9]{24}|[a-f0-9]{8,})/i);
+    if (productIdMatch) {
+      entities.productId = productIdMatch[1];
+    } else if (!lowerMessage.includes('order') && !lowerMessage.includes('tracking')) {
+      const standaloneIdMatch = lowerMessage.match(/\b([a-f0-9]{8,})\b/);
+      if (standaloneIdMatch) entities.productId = standaloneIdMatch[1];
+    }
+    
+    const patterns = [
+      /(?:find|search|looking for|need a|need an|want|give me|show me|details of)\s+([a-zA-Z0-9\s]+?)(?:\?|$)/i,
+      /(?:product|item)\s+(?:called|named)\s+([a-zA-Z0-9\s]+?)(?:\?|$)/i,
+      /([a-zA-Z0-9\s]+?)\s+(?:shirt|jacket|dress|pants|shoes|laptop|phone|headphone|speaker)/i
+    ];
+    
+    for (const pattern of patterns) {
+      const match = lowerMessage.match(pattern);
+      if (match && match[1] && !entities.productId) {
+        entities.productQuery = match[1].trim();
+        break;
+      }
+    }
+    
+    const priceMatch = lowerMessage.match(/(?:under|below|less than|over|above|more than)\s*\$?(\d+)/i);
+    if (priceMatch) entities.priceRange = parseInt(priceMatch[1]);
+    
+    return entities;
+  }
+}
+
+module.exports = new RAGService();
+
+
+
+
+
+
+const Product = require('../../models/Product');
+const Order = require('../../models/Order');
+const ChatMessage = require('../models/ChatMessage');
+const vectorStore = require('../utils/vectorStore');
+
+class RecommendationService {
+  /**
+   * Get personalized recommendations based on user history and vector similarity
+   */
+  getPersonalizedRecommendations = async (userId, limit = 5) => {
+    try {
+      if (!userId || userId === 'guest') {
+        return await this.getPopularProducts(limit);
+      }
+
+      // Get user's recent order patterns
+      const orders = await Order.find({ userId })
+        .populate('products.productId')
+        .sort({ createdAt: -1 })
+        .limit(10);
+        
+      if (orders.length === 0) {
+        return await this.getPopularProducts(limit);
+      }
+
+      // Gather matching database references safely
+      const productIds = [];
+      orders.forEach(order => {
+        if (order.products) {
+          order.products.forEach(item => {
+            if (item.productId && item.productId._id) {
+              productIds.push(item.productId._id.toString());
+            }
+          });
+        }
+      });
+
+      const uniqueProductIds = [...new Set(productIds)];
+      let recommendations = [];
+
+      // Vector search relative context expansion up to top 3 products
+      for (const productId of uniqueProductIds.slice(0, 3)) {
+        const product = await Product.findById(productId);
+        if (product) {
+          const similar = await vectorStore.searchSimilarProducts(
+            `${product.name} ${product.category || ''}`,
+            3
+          );
+          if (Array.isArray(similar)) {
+            recommendations = [...recommendations, ...similar];
+          }
+        }
+      }
+
+      // Deduplicate vector models outputs cleanly
+      const seen = new Set();
+      const uniqueRecommendations = recommendations.filter(item => {
+        const itemId = item.id || item._id?.toString();
+        if (!itemId || seen.has(itemId)) return false;
+        seen.add(itemId);
+        return true;
+      });
+
+      if (uniqueRecommendations.length === 0) {
+        return await this.getPopularProducts(limit);
+      }
+
+      return uniqueRecommendations.slice(0, limit);
+    } catch (error) {
+      console.error('Error compounding personalized vectors mapping:', error);
+      return await this.getPopularProducts(limit);
+    }
+  };
+
+  /**
+   * Get popular products via MongoDB aggregation aggregation metrics
+   */
+  getPopularProducts = async (limit = 5) => {
+    try {
+      const popularProducts = await Order.aggregate([
+        { $unwind: '$products' },
+        {
+          $group: {
+            _id: '$products.productId',
+            totalQuantity: { $sum: '$products.quantity' },
+            totalRevenue: { $sum: { $multiply: ['$products.price', '$products.quantity'] } }
+          }
+        },
+        { $sort: { totalQuantity: -1 } },
+        { $limit: limit },
+        {
+          $lookup: {
+            from: 'products',
+            localField: '_id',
+            foreignField: '_id',
+            as: 'productDetails'
+          }
+        },
+        { $unwind: '$productDetails' }
+      ]);
+
+      return popularProducts.map(item => ({
+        id: item._id?.toString(),
+        name: item.productDetails.name,
+        category: item.productDetails.category,
+        price: item.productDetails.price,
+        discount: item.productDetails.discount,
+        image: item.productDetails.image,
+        stock: item.productDetails.stock,
+        sales: item.totalQuantity,
+        revenue: item.totalRevenue
+      }));
+    } catch (error) {
+      console.error('Error calculating analytical popular data maps:', error);
+      return [];
+    }
+  };
+
+  /**
+   * Get recommendations optimized against current dialogue window parameters
+   */
+  getConversationBasedRecommendations = async (chatHistory, limit = 3) => {
+    try {
+      const productMentions = [];
+      const stopWords = ['please', 'want', 'need', 'show', 'find', 'with', 'have', 'that'];
+
+      for (const msg of (chatHistory || [])) {
+        if (msg.role === 'user' && msg.content) {
+          const words = msg.content.toLowerCase().split(/\s+/);
+          for (const word of words) {
+            const cleanWord = word.replace(/[^a-zA-Z0-9]/g, '');
+            if (cleanWord.length > 3 && !stopWords.includes(cleanWord)) {
+              productMentions.push(cleanWord);
+            }
+          }
+        }
+      }
+
+      if (productMentions.length > 0) {
+        const query = productMentions.slice(-5).join(' '); // prioritize latest terms
+        const results = await vectorStore.searchSimilarProducts(query, limit);
+        if (Array.isArray(results) && results.length > 0) return results;
+      }
+
+      return await this.getPopularProducts(limit);
+    } catch (error) {
+      console.error('Error binding dialogue vector streams:', error);
+      return [];
+    }
+  };
+
+  /**
+   * Get product recommendations matching direct categories regex parameters
+   */
+  getRecommendationsByCategory = async (category, limit = 5) => {
+    try {
+      if (!category) return [];
+      
+      const products = await Product.find({ 
+        category: { $regex: category, $options: 'i' },
+        stock: { $gt: 0 }
+      })
+      .sort({ createdAt: -1 })
+      .limit(limit);
+
+      return products.map(product => ({
+        id: product._id?.toString(),
+        name: product.name,
+        description: product.description,
+        price: product.price,
+        discount: product.discount,
+        category: product.category,
+        image: product.image,
+        stock: product.stock
+      }));
+    } catch (error) {
+      console.error('Error fetching structural category maps:', error);
+      return [];
+    }
+  };
+
+  /**
+   * Get dynamic hybrid clusters (Personalized + Analytical Volume Fallbacks)
+   */
+  getHybridRecommendations = async (userId = null, limit = 5) => {
+    try {
+      let recommendations = [];
+      
+      if (userId && userId !== 'guest') {
+        const targetSlice = Math.ceil(limit / 2);
+        const personalized = await this.getPersonalizedRecommendations(userId, targetSlice);
+        if (Array.isArray(personalized)) {
+          recommendations = [...recommendations, ...personalized];
+        }
+      }
+
+      const remaining = limit - recommendations.length;
+      if (remaining > 0) {
+        const popular = await this.getPopularProducts(remaining);
+        if (Array.isArray(popular)) {
+          recommendations = [...recommendations, ...popular];
+        }
+      }
+
+      const seen = new Set();
+      return recommendations.filter(item => {
+        const itemId = item.id || item._id?.toString();
+        if (!itemId || seen.has(itemId)) return false;
+        seen.add(itemId);
+        return true;
+      });
+    } catch (error) {
+      console.error('Error compiling balanced hybrid recommendations:', error);
+      return await this.getPopularProducts(limit);
+    }
+  };
+}
+
+module.exports = new RecommendationService();
+
+
+
+/**
+ * Generates a deterministic fallback pseudo-embedding vector in memory 
+ * when heavy external LLM models providers are completely offline.
+ */
+function createLocalEmbedding(text) {
+  const normalized = String(text || '').toLowerCase();
+  const seed = [...normalized].reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const dimensions = Number(process.env.VECTOR_DIMENSIONS || 384);
+  
+  return Array.from({ length: dimensions }, (_, index) => {
+    // Deterministic mathematical vector calculation over dimensions mapping array
+    const value = Math.sin((seed + index + 1) * 0.7) * 0.5 + Math.cos((index + 1) * 0.3) * 0.25;
+    return Number(value.toFixed(6));
+  });
+}
+
+/**
+ * Validates connection statuses or quota limitation exceptions on Gemini instances
+ */
+function isGeminiUnavailable(error) {
+  const status = error?.status || error?.response?.status;
+  const message = `${error?.message || ''} ${error?.statusText || ''}`.toLowerCase();
+  return status === 404 || status === 429 || message.includes('quota') || message.includes('not found') || message.includes('rate limit');
+}
+
+/**
+ * Validates connection statuses, unauthorized token access, or rate limitation bounds on Hugging Face API
+ */
+function isHuggingFaceUnavailable(error) {
+  const status = error?.status || error?.response?.status;
+  const message = `${error?.message || ''} ${error?.statusText || ''}`.toLowerCase();
+  return status === 401 || status === 403 || status === 429 || message.includes('token') || message.includes('rate limit') || message.includes('not found');
+}
+
+/**
+ * Compiles a structured, user-friendly conversational block when cloud completion gateways time out
+ */
+function createFallbackResponse(userMessage, context = {}) {
+  const lowerMessage = String(userMessage || '').toLowerCase();
+  const hasProductQuery = /product|buy|look|search|find|recommend|need|want/i.test(lowerMessage);
+  
+  const queryMatch = String(userMessage || '').match(/(?:find|search|looking for|need|want|recommend|buy)\s+(.+)/i);
+  const queryText = queryMatch ? queryMatch[1].trim() : '';
+  
+  if (hasProductQuery) {
+    if (queryText) {
+      return `I’m currently unable to reach the Gemini API, so I can’t generate a live recommendation for "${queryText}" right now. Please try again shortly, or browse our products directly for the best available options.`;
+    }
+    return "I’m currently unable to reach the Gemini API, so I can’t generate a live recommendation right now. Please try again shortly, or browse our products directly for the best available options.";
+  }
+  
+  return "I’m currently unable to reach the AI service, but I can still help you browse products or check order status manually. Please try again shortly.";
+}
+
+module.exports = {
+  createLocalEmbedding,
+  isGeminiUnavailable,
+  isHuggingFaceUnavailable,
+  createFallbackResponse
+};
+
+
+
+// chatbot/utils/vectorStore.js
+const ollamaService = require('../services/ollamaService');
+const Product = require('../../models/Product');
+const ProductEmbedding = require('../models/ProductEmbedding');
+const mongoose = require('mongoose');
+
+class VectorStore {
+  constructor() {
+    this.ollamaService = ollamaService;
+    this.initialized = false;
+  }
+
+  initialize = async () => {
+    if (this.initialized) return;
+
+    if (mongoose.connection.readyState !== 1) {
+      throw new Error('Vector store initialization requires an active MongoDB connection');
+    }
+
+    this.initialized = true;
+    console.log('✅ MongoDB Vector Store initialized successfully (Ollama Router Engine)');
+  };
+
+  /**
+   * Generate vectors dynamically utilizing active Ollama service layers
+   */
+  generateEmbedding = async (text) => {
+    try {
+      return await this.ollamaService.generateEmbedding(text);
+    } catch (error) {
+      console.error('Vector allocation exception thrown:', error);
+      throw error;
+    }
+  };
+
+  /**
+   * Index or upsert product embeddings map structures
+   */
+  indexProduct = async (product) => {
+    try {
+      await this.initialize();
+      const text = `${product.name} ${product.description || ''} ${product.category || ''}`.trim();
+      const embedding = await this.generateEmbedding(text);
+      
+      const result = await ProductEmbedding.findOneAndUpdate(
+        { productId: product._id },
+        {
+          productId: product._id,
+          embedding: embedding,
+          text: text,
+          metadata: {
+            name: product.name,
+            category: product.category,
+            price: product.price,
+            discount: product.discount || 0,
+            image: product.image || '',
+            stock: product.stock || 0,
+            description: product.description || ''
+          }
+        },
+        { upsert: true, returnDocument: 'after' }
+      );
+      
+      console.log(`✅ Indexed product parameters: ${product.name}`);
+      return result;
+    } catch (error) {
+      console.error(`Index update runtime fault for product reference ${product?._id}:`, error);
+      return null;
+    }
+  };
+
+  /**
+   * Index all core inventory configurations sequentially
+   */
+  indexAllProducts = async () => {
+    try {
+      await this.initialize();
+      const products = await Product.find({});
+      let indexed = 0;
+      
+      for (const product of products) {
+        const result = await this.indexProduct(product);
+        if (result) indexed++;
+      }
+      
+      console.log(`✅ Structural Index processing finalized: ${indexed}/${products.length} records processed.`);
+      return indexed;
+    } catch (error) {
+      console.error('Critical failure execution under global database indexing loop:', error);
+      throw error;
+    }
+  };
+
+  buildSearchFilter = (filter = {}) => {
+    const searchFilter = {};
+    if (filter.category) {
+      searchFilter.category = filter.category;
+    }
+    if (filter.minPrice != null || filter.maxPrice != null) {
+      searchFilter.price = {};
+      if (filter.minPrice != null) {
+        searchFilter.price.$gte = filter.minPrice;
+      }
+      if (filter.maxPrice != null) {
+        searchFilter.price.$lte = filter.maxPrice;
+      }
+    }
+    return searchFilter;
+  };
+
+  buildVectorSearchStage = (queryVector, limit, filter = {}) => {
+    const vectorSearchStage = {
+      $vectorSearch: {
+        index: process.env.VECTOR_INDEX_NAME || 'product_embeddings_index',
+        path: 'embedding',
+        queryVector,
+        numCandidates: Math.max(limit * 10, 10),
+        limit
+      }
+    };
+    
+    const searchFilter = this.buildSearchFilter(filter);
+    if (Object.keys(searchFilter).length > 0) {
+      vectorSearchStage.$vectorSearch.filter = searchFilter;
+    }
+    return vectorSearchStage;
+  };
+
+  /**
+   * Search similar items deploying native Ollama structural vectors maps
+   */
+  searchSimilarProducts = async (query, limit = 5, filter = {}) => {
+    try {
+      await this.initialize();
+      const queryEmbedding = await this.generateEmbedding(query);
+      const vectorSearchStage = this.buildVectorSearchStage(queryEmbedding, limit, filter);
+      
+      const results = await ProductEmbedding.aggregate([
+        vectorSearchStage,
+        {
+          $lookup: {
+            from: 'products',
+            localField: 'productId',
+            foreignField: '_id',
+            as: 'product'
+          }
+        },
+        {
+          $unwind: '$product'
+        },
+        {
+          $project: {
+            id: '$productId',
+            name: '$metadata.name',
+            category: '$metadata.category',
+            price: '$metadata.price',
+            discount: '$metadata.discount',
+            image: '$metadata.image',
+            stock: '$metadata.stock',
+            description: '$metadata.description',
+            similarity: { $meta: 'vectorSearchScore' },
+            product: 1
+          }
+        },
+        {
+          $sort: { similarity: -1 }
+        }
+      ]);
+      
+      return results;
+    } catch (error) {
+      console.error('Semantic pipeline search anomaly caught safely:', error);
+      return [];
+    }
+  };
+
+  /**
+   * Get relative lookalikes matching internal product references profiles
+   */
+  getSimilarProducts = async (productId, limit = 5) => {
+    try {
+      await this.initialize();
+      const productEmbedding = await ProductEmbedding.findOne({ productId });
+      if (!productEmbedding) return [];
+      
+      return await ProductEmbedding.aggregate([
+        {
+          $vectorSearch: {
+            index: process.env.VECTOR_INDEX_NAME || 'product_embeddings_index',
+            path: 'embedding',
+            queryVector: productEmbedding.embedding,
+            numCandidates: limit * 10,
+            limit: limit + 1
+          }
+        },
+        {
+          $match: {
+            productId: { $ne: productId }
+          }
+        },
+        {
+          $lookup: {
+            from: 'products',
+            localField: 'productId',
+            foreignField: '_id',
+            as: 'product'
+          }
+        },
+        {
+          $unwind: '$product'
+        },
+        {
+          $project: {
+            id: '$productId',
+            name: '$metadata.name',
+            category: '$metadata.category',
+            price: '$metadata.price',
+            discount: '$metadata.discount',
+            image: '$metadata.image',
+            stock: '$metadata.stock',
+            description: '$metadata.description',
+            similarity: { $meta: 'vectorSearchScore' }
+          }
+        },
+        {
+          $sort: { similarity: -1 }
+        },
+        {
+          $limit: limit
+        }
+      ]);
+    } catch (error) {
+      console.error('Failed to extract similar context vectors maps safely:', error);
+      return [];
+    }
+  };
+}
+
+module.exports = new VectorStore();
+
+
+const dotenv = require('dotenv');
+dotenv.config();
+const express = require('express');
+const app = express();
+const cors = require('cors');
+const compression = require('compression');
+const logger = require('./utils/logger');
+const { errorHandler } = require('./middleware/errorHandler');
+
+const connectDB = require('./config/database');
+
+// Middleware
+app.use(cors());
+app.use(compression());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
+
+// Home route
+app.get('/', (req, res) => {
+  res.json({ message: 'E-commerce API is running' });
+});
+
+const startServer = async () => {
+  try {
+    await connectDB();
+
+    require('./config/passport');
+    require('./cron/analyticsCron');
+
+    const analyticsRoutes = require('./routes/analyticsRoutes');
+    const feedbackRoutes = require('./routes/feedbackeRoute');
+    const notificationRoutes = require('./routes/notificationRoutes');
+    const paymentRoutes = require('./routes/paymentRoutes');
+    const ordersRoutes = require('./routes/ordersRoute');
+    const authRoutes = require('./routes/authRoutes');
+    const productRoutes = require('./routes/productRoutes');
+    const chatbotRoutes = require('./chatbot/routes/chatbotRoutes');
+    const vectorStore = require('./chatbot/utils/vectorStore');
+
+    app.use('/api/auth', authRoutes);
+    app.use('/auth', authRoutes);
+    app.use('/api/products', productRoutes);
+    app.use('/api/orders', ordersRoutes);
+    app.use('/api/payments', paymentRoutes);
+    app.use('/api/feedback', feedbackRoutes);
+    app.use('/api/notifications', notificationRoutes);
+    app.use('/api/analytics', analyticsRoutes);
+    app.use('/api/chatbot', chatbotRoutes);
+
+    app.use((req, res) => {
+      res.status(404).json({ success: false, message: 'Route not found' });
+    });
+
+    app.use(errorHandler);
+
+    const PORT = process.env.PORT || 5000;
+    app.listen(PORT, () => {
+      logger.info(`Server running on port ${PORT}`);
+    });
+
+    await vectorStore.initialize();
+  } catch (error) {
+    logger.error('Failed to start server:', error.message);
+    process.exit(1);
+  }
+};
+
+startServer();
+
+
+
+
+Frontend:
+
+import React, { useState, useEffect, useRef } from 'react';
+import chatbotService from '../services/ChatbotService';
+
+const ChatBot = () => {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [recommendations, setRecommendations] = useState([]);
+  const [userRole, setUserRole] = useState('customer');
+  const messagesEndRef = useRef(null);
+
+  useEffect(() => {
+    const storedUser = JSON.parse(localStorage.getItem('user') || '{}');
+    if (storedUser?.role) {
+      setUserRole(storedUser.role);
+    }
+
+    loadRecommendations();
+    loadHistory(storedUser?.role || 'customer');
+  }, []);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const loadHistory = async (role = 'customer') => {
+    try {
+      const history = await chatbotService.getHistory(null, role);
+      if (history.length > 0) {
+        setMessages(history.map(msg => ({
+          id: msg._id,
+          text: msg.content,
+          sender: msg.role === 'user' ? 'user' : 'bot',
+          timestamp: msg.createdAt
+        })));
+      }
+    } catch (error) {
+      console.error('Error loading history:', error);
+    }
+  };
+
+  const loadRecommendations = async () => {
+    try {
+      const items = await chatbotService.getRecommendations(3);
+      setRecommendations(items);
+    } catch (error) {
+      console.error('Error loading recommendations:', error);
+    }
+  };
+
+  const handleSend = async () => {
+    if (!input.trim()) return;
+
+    const userMessage = {
+      id: Date.now(),
+      text: input,
+      sender: 'user',
+      timestamp: new Date()
+    };
+
+    setMessages(prev => [...prev, userMessage]);
+    setInput('');
+    setIsLoading(true);
+
+    const endpoint = userRole === 'admin' ? '/chatbot/message/admin' : '/chatbot/message/customer';
+
+    try {
+      const response = await chatbotService.sendMessage(input, endpoint, userRole);
+      
+      const botMessage = {
+        id: Date.now() + 1,
+        text: response.response,
+        sender: 'bot',
+        timestamp: new Date(),
+        intent: response.intent,
+        orderStatus: response.orderStatus,
+        recommendations: response.recommendations,
+        productMeta: response.productMeta,
+        products: response.products,
+        orders: response.orders
+      };
+
+      setMessages(prev => [...prev, botMessage]);
+
+      if (response.recommendations?.length > 0) {
+        setRecommendations(response.recommendations);
+      }
+    } catch (error) {
+      setMessages(prev => [...prev, {
+        id: Date.now() + 1,
+        text: 'Sorry, I encountered an error. Please try again.',
+        sender: 'bot',
+        timestamp: new Date(),
+        isError: true
+      }]);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleKeyPress = (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
+  };
+
+  const formatTime = (timestamp) => {
+    return new Date(timestamp).toLocaleTimeString([], { 
+      hour: '2-digit', 
+      minute: '2-digit' 
+    });
+  };
+
+  return (
+    <div className="chatbot-container">
+      <div className="chatbot-header">
+        <div>
+          <h3>{userRole === 'admin' ? '🧠 Admin AI Assistant' : '🤖 Shopping Assistant'}</h3>
+          <p className="chatbot-role-note">
+            {userRole === 'admin'
+              ? 'Ask about sales, inventory, feedback, and store analytics.'
+              : 'Ask about products, orders, recommendations, or search help.'}
+          </p>
+        </div>
+        <span className="status-badge">Online</span>
+      </div>
+
+      <div className="chat-messages">
+        {messages.length === 0 && (
+          <div className="welcome-message">
+            <p>👋 Hello! I'm your AI shopping assistant.</p>
+            <p>I can help you with:</p>
+            <ul>
+              <li>🔍 Finding products</li>
+              <li>📦 Tracking orders</li>
+              <li>💡 Recommendations</li>
+              <li>🛍️ General inquiries</li>
+            </ul>
+            {recommendations.length > 0 && (
+              <div className="quick-recommendations">
+                <p>🔥 Popular products:</p>
+                <div className="recommendation-grid">
+                  {recommendations.map((item) => (
+                    <button key={item.id} className="rec-btn">
+                      {item.name}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {messages.map((msg) => (
+          <div
+            key={msg.id}
+            className={`message ${msg.sender === 'user' ? 'user-message' : 'bot-message'}`}
+          >
+            <div className="message-content">
+              <span className="sender">{msg.sender === 'user' ? 'You' : '🤖'}</span>
+              <p>{msg.text}</p>
+              {msg.orderStatus && (
+                <div className="order-status">
+                  <h4>📦 Order Status</h4>
+                  <p>Status: <strong>{msg.orderStatus.status}</strong></p>
+                  <p>Payment: {msg.orderStatus.paymentStatus}</p>
+                  <p>Total: ${msg.orderStatus.totalAmount}</p>
+                  {msg.orderStatus.products && (
+                    <div className="order-products">
+                      {msg.orderStatus.products.map((item, i) => (
+                        <span key={i}>{item.name} x{item.quantity}</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+              {msg.orders && msg.orders.length > 0 && (
+                <div className="order-history">
+                  <h4>📋 Your Order History ({msg.orders.length})</h4>
+                  <div className="orders-list">
+                    {msg.orders.map((order, idx) => {
+                      const statusColors = {
+                        pending: '#fbbf24',
+                        success: '#10b981',
+                        failed: '#ef4444',
+                        processing: '#3b82f6',
+                        shipped: '#a855f7',
+                        delivered: '#10b981',
+                        cancelled: '#9ca3af'
+                      };
+                      const paymentBadgeColor = statusColors[order.paymentStatus] || '#6b7280';
+                      const orderBadgeColor = statusColors[order.orderStatus] || '#6b7280';
+                      
+                      return (
+                        <div key={idx} className="order-item">
+                          <div className="order-header">
+                            <span className="order-id">Order #{order._id.substring(0, 8)}...</span>
+                            <span className="order-date">{new Date(order.createdAt).toLocaleDateString()}</span>
+                          </div>
+                          <div className="order-badges">
+                            <span className="badge" style={{backgroundColor: paymentBadgeColor + '20', color: paymentBadgeColor}}>
+                              💳 {order.paymentStatus.toUpperCase()}
+                            </span>
+                            <span className="badge" style={{backgroundColor: orderBadgeColor + '20', color: orderBadgeColor}}>
+                              📦 {order.orderStatus.toUpperCase()}
+                            </span>
+                          </div>
+                          <div className="order-amount">
+                            Total: <strong>${order.totalAmount.toFixed(2)}</strong>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+              {msg.recommendations && msg.recommendations.length > 0 && (
+                <div className="recommendations">
+                  <p>💡 You might also like:</p>
+                  {msg.recommendations.map((item) => (
+                    <button key={item.id} className="rec-btn">
+                      {item.name} - ${item.price}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {(msg.productMeta || (msg.products && msg.products.length > 0)) && (() => {
+                const product = msg.productMeta || msg.products[0];
+                const imageUrl = product.image || null;
+                const pageUrl = product.pageUrl || null;
+
+                return (
+                  <div className="product-card">
+                    {imageUrl && (
+                      <div className="product-image-wrapper">
+                        <img
+                          src={imageUrl}
+                          alt={product.name}
+                          className="product-image"
+                        />
+                      </div>
+                    )}
+                    <div className="product-details">
+                      <h4>{product.name}</h4>
+                      <p className="product-category">{product.category}</p>
+                      <p className="product-price">${product.discountedPrice ?? product.price}</p>
+                      {product.discount > 0 && (
+                        <p className="product-discount">{product.discount}% off</p>
+                      )}
+                      {product.stock !== null && product.stock !== undefined && (
+                        <p className="product-stock">Stock available: {product.stock}</p>
+                      )}
+                      {product.description && (
+                        <p className="product-description">{product.description}</p>
+                      )}
+                      <div className="product-action-row">
+                        {pageUrl && (
+                          <a
+                            href={pageUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="product-btn"
+                          >
+                            View product page
+                          </a>
+                        )}
+                        {imageUrl && (
+                          <a
+                            href={imageUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="product-btn product-btn-secondary"
+                          >
+                            View image
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+              <span className="timestamp">{formatTime(msg.timestamp)}</span>
+            </div>
+          </div>
+        ))}
+
+        {isLoading && (
+          <div className="message bot-message">
+            <div className="message-content">
+              <span className="sender">🤖</span>
+              <div className="typing-indicator">
+                <span></span>
+                <span></span>
+                <span></span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={messagesEndRef} />
+      </div>
+
+      <div className="chat-input">
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyPress={handleKeyPress}
+          placeholder={userRole === 'admin'
+            ? 'Ask sales, inventory, or feedback analytics questions...'
+            : 'Find products, track orders, or ask for recommendations...'}
+          rows={2}
+          disabled={isLoading}
+        />
+        <button 
+          onClick={handleSend}
+          disabled={isLoading || !input.trim()}
+        >
+          {isLoading ? '⏳' : 'Send'}
+        </button>
+      </div>
+
+      <style jsx>{`
+        .chatbot-container {
+          display: flex;
+          flex-direction: column;
+          height: 600px;
+          max-width: 500px;
+          margin: 0 auto;
+          border: 1px solid #e0e0e0;
+          border-radius: 12px;
+          overflow: hidden;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+
+        .chatbot-header {
+          padding: 16px 20px;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+        }
+
+        .chatbot-header h3 {
+          margin: 0;
+          font-weight: 600;
+        }
+
+        .chatbot-role-note {
+          margin: 4px 0 0;
+          font-size: 13px;
+          color: rgba(255,255,255,0.85);
+        }
+
+        .status-badge {
+          font-size: 12px;
+          background: #4caf50;
+          padding: 4px 12px;
+          border-radius: 12px;
+          color: white;
+          font-weight: 500;
+        }
+
+        .chat-messages {
+          flex: 1;
+          padding: 20px;
+          overflow-y: auto;
+          background: #f8f9fa;
+        }
+
+        .welcome-message {
+          text-align: center;
+          color: #666;
+          padding: 20px 0;
+        }
+
+        .welcome-message ul {
+          list-style: none;
+          padding: 0;
+          text-align: left;
+          max-width: 300px;
+          margin: 10px auto;
+        }
+
+        .welcome-message ul li {
+          padding: 4px 0;
+        }
+
+        .message {
+          margin-bottom: 16px;
+          animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-message .message-content {
+          background: #007bff;
+          color: white;
+          margin-left: auto;
+        }
+
+        .bot-message .message-content {
+          background: white;
+          color: #333;
+        }
+
+        .message-content {
+          max-width: 85%;
+          padding: 12px 16px;
+          border-radius: 12px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+          position: relative;
+        }
+
+        .sender {
+          font-size: 12px;
+          font-weight: 600;
+          opacity: 0.7;
+          display: block;
+          margin-bottom: 4px;
+        }
+
+        .message-content p {
+          margin: 0 0 8px 0;
+          word-wrap: break-word;
+        }
+
+        .timestamp {
+          font-size: 10px;
+          opacity: 0.6;
+          display: block;
+          margin-top: 4px;
+        }
+
+        .order-status {
+          background: #f0f8ff;
+          padding: 12px;
+          border-radius: 8px;
+          margin-top: 8px;
+          font-size: 14px;
+        }
+
+        .order-status h4 {
+          margin: 0 0 8px 0;
+          font-size: 14px;
+        }
+
+        .order-status p {
+          margin: 4px 0;
+        }
+
+        .order-products {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+          margin-top: 8px;
+        }
+
+        .order-products span {
+          background: #e3f2fd;
+          padding: 2px 8px;
+          border-radius: 4px;
+          font-size: 12px;
+        }
+
+        .recommendations {
+          margin-top: 12px;
+        }
+
+        .recommendations p {
+          font-size: 13px;
+          font-weight: 600;
+          margin-bottom: 8px;
+        }
+
+        .rec-btn {
+          background: #e8f5e9;
+          border: none;
+          padding: 6px 14px;
+          border-radius: 16px;
+          font-size: 12px;
+          color: #2e7d32;
+          cursor: pointer;
+          margin: 2px 4px;
+          transition: all 0.2s;
+        }
+
+        .product-card {
+          display: flex;
+          gap: 12px;
+          margin-top: 12px;
+          padding: 14px;
+          border-radius: 12px;
+          background: #f5f7ff;
+          border: 1px solid #dbe4ff;
+        }
+
+        .product-image-wrapper {
+          width: 120px;
+          min-width: 120px;
+          overflow: hidden;
+          border-radius: 12px;
+          background: #fff;
+          border: 1px solid #e2e8f0;
+        }
+
+        .product-image {
+          width: 100%;
+          height: 100%;
+          object-fit: cover;
+          display: block;
+        }
+
+        .product-details {
+          flex: 1;
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+        }
+
+        .product-details h4 {
+          margin: 0;
+          font-size: 15px;
+          font-weight: 700;
+        }
+
+        .product-category,
+        .product-description,
+        .product-stock,
+        .product-discount,
+        .product-price {
+          margin: 0;
+          font-size: 13px;
+          line-height: 1.4;
+          color: #374151;
+        }
+
+        .product-price {
+          font-size: 14px;
+          font-weight: 700;
+          color: #111827;
+        }
+
+        .product-action-row {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 8px;
+          margin-top: 8px;
+        }
+
+        .product-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 8px 12px;
+          border-radius: 9999px;
+          background: #3b82f6;
+          color: white;
+          text-decoration: none;
+          font-size: 13px;
+          transition: background 0.2s;
+        }
+
+        .product-btn:hover {
+          background: #2563eb;
+        }
+
+        .product-btn-secondary {
+          background: #eef2ff;
+          color: #4338ca;
+        }
+
+        .product-btn-secondary:hover {
+          background: #e0e7ff;
+        }
+
+        .rec-btn:hover {
+          background: #c8e6c9;
+          transform: scale(1.05);
+        }
+
+        .quick-recommendations {
+          margin-top: 16px;
+          background: white;
+          padding: 12px;
+          border-radius: 8px;
+          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .quick-recommendations p {
+          font-weight: 600;
+          margin-bottom: 8px;
+        }
+
+        .recommendation-grid {
+          display: flex;
+          flex-wrap: wrap;
+          gap: 4px;
+        }
+
+        .chat-input {
+          display: flex;
+          gap: 10px;
+          padding: 16px;
+          background: white;
+          border-top: 1px solid #e0e0e0;
+        }
+
+        .chat-input textarea {
+          flex: 1;
+          padding: 10px 14px;
+          border: 1px solid #ddd;
+          border-radius: 20px;
+          resize: none;
+          font-family: inherit;
+          font-size: 14px;
+          line-height: 1.4;
+          color: #111827;
+          background-color: #ffffff;
+          outline: none;
+          transition: border-color 0.3s;
+        }
+
+        .chat-input textarea::placeholder {
+          color: #9ca3af;
+        }
+
+        .chat-input textarea:focus {
+          border-color: #667eea;
+        }
+
+        .chat-input textarea:disabled {
+          opacity: 0.5;
+        }
+
+        .chat-input button {
+          padding: 10px 24px;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          border: none;
+          border-radius: 20px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.3s;
+        }
+
+        .chat-input button:hover:not(:disabled) {
+          transform: scale(1.05);
+          box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+        }
+
+        .chat-input button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
+
+        .typing-indicator {
+          display: flex;
+          gap: 4px;
+          padding: 4px 0;
+        }
+
+        .typing-indicator span {
+          width: 8px;
+          height: 8px;
+          background: #999;
+          border-radius: 50%;
+          animation: typing 1.4s infinite both;
+        }
+
+        .typing-indicator span:nth-child(2) {
+          animation-delay: 0.2s;
+        }
+
+        .typing-indicator span:nth-child(3) {
+          animation-delay: 0.4s;
+        }
+
+        @keyframes typing {
+          0%, 60%, 100% { transform: scale(1); opacity: 0.4; }
+          30% { transform: scale(1.2); opacity: 1; }
+        }
+
+        .error .message-content {
+          background: #f44336;
+          color: white;
+        }
+      `}</style>
+    </div>
+  );
+};
+
+export default ChatBot;
+
+
+
+chatbotservice.js:
+// services/chatbotService.js
+import axios from 'axios';
+
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000/api';
+
+class ChatbotService {
+  constructor() {
+    this.role = 'customer';
+    this.sessionId = null;
+  }
+
+  getSessionKey(role = 'customer') {
+    return `chatSessionId_${role}`;
+  }
+
+  getSessionId(role = 'customer') {
+    return localStorage.getItem(this.getSessionKey(role));
+  }
+
+  setSessionId(sessionId, role = 'customer') {
+    if (!sessionId) return;
+    localStorage.setItem(this.getSessionKey(role), sessionId);
+    if (role === this.role) {
+      this.sessionId = sessionId;
+    }
+  }
+
+  clearSessionId(role = 'customer') {
+    localStorage.removeItem(this.getSessionKey(role));
+    if (role === this.role) {
+      this.sessionId = null;
+    }
+  }
+
+  async loadSession(role = 'customer') {
+    this.role = role;
+    this.sessionId = this.getSessionId(role);
+
+    if (this.sessionId) {
+      return this.sessionId;
+    }
+
+    const token = localStorage.getItem('token');
+    if (!token) {
+      return null;
+    }
+
+    try {
+      const response = await axios.get(`${API_URL}/chatbot/session`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      const sessionId = response.data?.data?.sessionId || null;
+      if (sessionId) {
+        this.setSessionId(sessionId, role);
+      }
+      return sessionId;
+    } catch (error) {
+      console.error('Error loading last chatbot session:', error);
+      return null;
+    }
+  }
+
+  async sendMessage(message, apiPath = '/chatbot/message/customer', role = 'customer') {
+    try {
+      this.role = role;
+      this.sessionId = this.getSessionId(role);
+      const token = localStorage.getItem('token');
+      const response = await axios.post(
+        `${API_URL}${apiPath}`,
+        {
+          message,
+          sessionId: this.sessionId
+        },
+        {
+          headers: token ? { Authorization: `Bearer ${token}` } : {}
+        }
+      );
+
+      // Store session ID
+      if (response.data.data?.sessionId) {
+        this.setSessionId(response.data.data.sessionId, role);
+      }
+
+      return response.data.data;
+    } catch (error) {
+      console.error('Chatbot error:', error);
+      throw error.response?.data?.error || 'Failed to send message';
+    }
+  }
+
+  async getHistory(sessionId = null, role = 'customer') {
+    try {
+      this.role = role;
+      let id = sessionId || this.getSessionId(role);
+      if (!id) {
+        id = await this.loadSession(role);
+      }
+      if (!id) {
+        return [];
+      }
+
+      const token = localStorage.getItem('token');
+      const response = await axios.get(
+        `${API_URL}/chatbot/history/${id}`,
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      return response.data.data;
+    } catch (error) {
+      console.error('Error getting history:', error);
+      return [];
+    }
+  }
+
+  async getRecommendations(limit = 5) {
+    try {
+      const response = await axios.get(
+        `${API_URL}/chatbot/recommendations?limit=${limit}`
+      );
+      return response.data.data;
+    } catch (error) {
+      console.error('Error getting recommendations:', error);
+      return [];
+    }
+  }
+
+  async semanticSearch(query, limit = 10) {
+    try {
+      const response = await axios.get(
+        `${API_URL}/chatbot/search?query=${encodeURIComponent(query)}&limit=${limit}`
+      );
+      return response.data.data;
+    } catch (error) {
+      console.error('Error searching:', error);
+      return [];
+    }
+  }
+
+  async endSession() {
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post(
+        `${API_URL}/chatbot/end-session`,
+        { sessionId: this.sessionId },
+        {
+          headers: { Authorization: `Bearer ${token}` }
+        }
+      );
+      localStorage.removeItem('chatSessionId');
+      this.sessionId = null;
+    } catch (error) {
+      console.error('Error ending session:', error);
+    }
+  }
+}
+
+export default new ChatbotService();
+
+
+
+import React, { Component } from 'react';
+import { Routes, Route } from 'react-router-dom';
+import Login from './pages/Login';
+import Register from './pages/Register';
+import VerifySuccess from './pages/VerifySuccess';
+import VerifyCode from './pages/VerifyCode';
+import GoogleCallback from './pages/GoogleCallback';
+import Home from './pages/Home';
+import Products from './pages/Products';
+import ProductDetails from './pages/ProductDetails';
+import Orders from './pages/Orders';
+import Checkout from './pages/Checkout';
+import Payments from './pages/Payments';
+import PaymentStatus from './pages/PaymentStatus';
+import FeedbackPage from './pages/FeedbackPage';
+import Analytics from './pages/Analytics';
+import Chatbot from './components/Chatbot';
+
+class ErrorBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error, info) {
+    console.error('ErrorBoundary caught an error:', error, info);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen flex items-center justify-center bg-gray-50 p-4">
+          <div className="max-w-xl w-full rounded-xl border border-red-200 bg-white p-6 shadow-lg">
+            <h1 className="text-2xl font-semibold text-red-700">Something went wrong.</h1>
+            <p className="mt-2 text-gray-600">An unexpected error occurred while loading the application.</p>
+            <pre className="mt-4 overflow-x-auto rounded bg-gray-100 p-3 text-sm text-gray-800">
+              {this.state.error?.toString()}
+            </pre>
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="mt-5 inline-flex rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700"
+            >
+              Reload page
+            </button>
+          </div>
+        </div>
+      );
+    }
+
+    return this.props.children;
+  }
+}
+
+
+const App = () => {
+  return (
+    <ErrorBoundary>
+      <div className="min-h-screen">
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/products" element={<Products />} />
+          <Route path="/product/:id" element={<ProductDetails />} />
+          <Route path="/orders" element={<Orders />} />
+          <Route path="/checkout" element={<Checkout />} />
+          <Route path="/payments" element={<Payments />} />
+          <Route path="/payment-success" element={<PaymentStatus />} />
+          <Route path="/payment-cancel" element={<PaymentStatus />} />
+          <Route path="/feedback" element={<FeedbackPage />} />
+          <Route path="/analytics" element={<Analytics />} />
+          <Route path="/login" element={<Login />} />
+          <Route path="/register" element={<Register />} />
+          <Route path="/verify-success" element={<VerifySuccess />} />
+          <Route path="/verify-code" element={<VerifyCode />} />
+          <Route path="/google-callback" element={<GoogleCallback />} />
+          # Add Chatbot route
+          <Route path="/chatbot" element={<Chatbot />} />
+        </Routes>
+      </div>
+    </ErrorBoundary>
+  );
+}
+
+export default App;
+

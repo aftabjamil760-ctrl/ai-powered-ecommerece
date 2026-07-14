@@ -1,14 +1,16 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { FcGoogle } from 'react-icons/fc';
 
 const Login = () => {
+    const cardRef = useRef(null);
     const [formData, setFormData] = useState({
         email: '',
         password: '',
     });
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
+    const [tiltStyle, setTiltStyle] = useState({ transform: 'perspective(1200px) rotateX(0deg) rotateY(0deg)' });
     const navigate = useNavigate();
 
     useEffect(() => {
@@ -17,6 +19,24 @@ const Login = () => {
             navigate('/');
         }
     }, [navigate]);
+
+    const handleMouseMove = (e) => {
+        const card = cardRef.current;
+        if (!card) return;
+
+        const rect = card.getBoundingClientRect();
+        const x = e.clientX - rect.left;
+        const y = e.clientY - rect.top;
+
+        const rotateY = ((x - rect.width / 2) / (rect.width / 2)) * 8;
+        const rotateX = -((y - rect.height / 2) / (rect.height / 2)) * 8;
+
+        setTiltStyle({ transform: `perspective(1200px) rotateX(${rotateX}deg) rotateY(${rotateY}deg)` });
+    };
+
+    const handleMouseLeave = () => {
+        setTiltStyle({ transform: 'perspective(1200px) rotateX(0deg) rotateY(0deg)' });
+    };
 
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -55,86 +75,92 @@ const Login = () => {
     };
 
     return (
-        <div className="min-h-screen flex items-center justify-center bg-gray-900 px-4">
-            <div className="max-w-md w-full bg-gray-800 rounded-xl shadow-2xl overflow-hidden p-8 space-y-8">
-                <h2 className="text-4xl font-bold text-center text-white">
-                    Welcome Back
-                </h2>
-                <p className="text-center text-gray-400">
-                    Sign in to continue to your account
-                </p>
+        <div className="relative min-h-screen flex items-center justify-center overflow-hidden bg-[#05070f] px-4 py-12">
+            <div className="pointer-events-none absolute -left-16 top-16 h-72 w-72 rounded-full bg-indigo-500/15 blur-3xl animate-pulse"></div>
+            <div className="pointer-events-none absolute right-0 top-24 h-72 w-72 rounded-full bg-fuchsia-500/10 blur-3xl animate-pulse"></div>
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-72 bg-[radial-gradient(circle,_rgba(99,102,241,0.18),_transparent_40%)]"></div>
 
-                {error && (
-                    <div className="bg-red-500/10 border border-red-500 text-red-500 rounded-lg p-3 text-sm text-center">
-                        {error}
+            <div
+                ref={cardRef}
+                onMouseMove={handleMouseMove}
+                onMouseLeave={handleMouseLeave}
+                style={tiltStyle}
+                className="relative z-10 w-full max-w-md rounded-[2rem] border border-white/10 bg-white/5 shadow-[0_30px_120px_-40px_rgba(15,23,42,0.8)] backdrop-blur-2xl transition-all duration-300"
+            >
+                <div className="relative rounded-[1.75rem] bg-[#09101f]/95 backdrop-blur-2xl p-10 border border-white/10 shadow-[0_20px_80px_-30px_rgba(15,23,42,0.9)]">
+                    <div className="mb-9 text-center">
+                        <h2 className="text-5xl font-semibold tracking-tight text-white">Welcome Back</h2>
+                        <p className="mt-4 text-sm text-slate-400 max-w-md mx-auto">Sign in to continue to your account</p>
                     </div>
-                )}
 
-                <div className="space-y-4">
-                    <button
-                        onClick={() => window.location.href = '/api/auth/google'}
-                        className="w-full flex items-center justify-center gap-3 bg-white text-gray-800 font-bold py-3 px-4 rounded-lg hover:bg-gray-100 transition duration-200 transform hover:scale-[1.02]"
-                    >
-                        <FcGoogle size={24} />
-                        Sign in with Google
-                    </button>
-
-                    <div className="relative">
-                        <div className="absolute inset-0 flex items-center">
-                            <div className="w-full border-t border-gray-600"></div>
+                    {error && (
+                        <div className="mb-6 rounded-3xl border border-[#ff4d6d]/20 bg-[#ff4d6d]/10 px-5 py-4 text-sm text-[#ffccd6] shadow-[0_12px_40px_-20px_rgba(255,77,109,0.45)]">
+                            {error}
                         </div>
-                        <div className="relative flex justify-center text-sm">
-                            <span className="px-2 bg-gray-800 text-gray-400">Or continue with email</span>
+                    )}
+
+                    <div className="space-y-4">
+                        <button
+                            onClick={() => window.location.href = '/api/auth/google'}
+                            className="w-full flex items-center justify-center gap-3 rounded-3xl bg-[#0e172d]/90 px-5 py-4 text-base font-semibold text-white shadow-[0_20px_80px_-40px_rgba(15,23,42,0.7)] transition duration-300 hover:scale-[1.02] hover:bg-[#13204b]/80 focus:outline-none focus:ring-2 focus:ring-indigo-400/30"
+                        >
+                            <FcGoogle size={24} />
+                            Sign in with Google
+                        </button>
+
+                        <div className="relative">
+                            <div className="absolute inset-0 flex items-center">
+                                <div className="w-full border-t border-white/10"></div>
+                            </div>
+                            <div className="relative flex justify-center text-sm text-slate-400">
+                                <span className="bg-[#09101f] px-3">Or continue with email</span>
+                            </div>
                         </div>
                     </div>
+
+                    <form onSubmit={handleSubmit} className="space-y-6">
+                        <div>
+                            <label className="block text-xs font-semibold uppercase tracking-[0.26em] text-slate-500 mb-3">Email Address</label>
+                            <input
+                                type="email"
+                                name="email"
+                                value={formData.email}
+                                onChange={handleChange}
+                                className="peer w-full rounded-3xl border border-white/10 bg-[#0e172d]/90 px-5 py-4 text-white placeholder:text-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] outline-none transition duration-300 focus:border-indigo-400 focus:bg-[#13204b]/90 focus:ring-2 focus:ring-indigo-500/20"
+                                placeholder="john@example.com"
+                                required
+                            />
+                        </div>
+
+                        <div>
+                            <label className="block text-xs font-semibold uppercase tracking-[0.26em] text-slate-500 mb-3">Password</label>
+                            <input
+                                type="password"
+                                name="password"
+                                value={formData.password}
+                                onChange={handleChange}
+                                className="peer w-full rounded-3xl border border-white/10 bg-[#0e172d]/90 px-5 py-4 text-white placeholder:text-slate-500 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)] outline-none transition duration-300 focus:border-indigo-400 focus:bg-[#13204b]/90 focus:ring-2 focus:ring-indigo-500/20"
+                                placeholder="••••••••"
+                                required
+                            />
+                        </div>
+
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            className="w-full rounded-3xl bg-gradient-to-r from-indigo-500 via-violet-500 to-fuchsia-500 px-6 py-4 text-base font-semibold text-white shadow-[0_24px_80px_-32px_rgba(124,58,237,0.75)] transition duration-300 hover:scale-[1.01] hover:shadow-[0_28px_90px_-32px_rgba(168,85,247,0.7)] focus:outline-none focus:ring-2 focus:ring-indigo-400/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {loading ? 'Signing In...' : 'Sign In'}
+                        </button>
+                    </form>
+
+                    <p className="mt-8 text-center text-sm text-slate-400">
+                        Don't have an account?{' '}
+                        <Link to="/register" className="font-semibold text-white transition duration-200 hover:text-indigo-300">
+                            Sign up
+                        </Link>
+                    </p>
                 </div>
-
-                <form onSubmit={handleSubmit} className="space-y-6">
-                    <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-1">
-                            Email Address
-                        </label>
-                        <input
-                            type="email"
-                            name="email"
-                            value={formData.email}
-                            onChange={handleChange}
-                            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition duration-200"
-                            placeholder="john@example.com"
-                            required
-                        />
-                    </div>
-
-                    <div>
-                        <label className="block text-sm font-medium text-gray-400 mb-1">
-                            Password
-                        </label>
-                        <input
-                            type="password"
-                            name="password"
-                            value={formData.password}
-                            onChange={handleChange}
-                            className="w-full bg-gray-700 border border-gray-600 rounded-lg px-4 py-3 text-white placeholder-gray-400 focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500 transition duration-200"
-                            placeholder="••••••••"
-                            required
-                        />
-                    </div>
-
-                    <button
-                        type="submit"
-                        disabled={loading}
-                        className="w-full bg-gradient-to-r from-blue-500 to-purple-600 text-white font-bold py-3 px-4 rounded-lg hover:from-blue-600 hover:to-purple-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 focus:ring-offset-gray-900 transition duration-200 disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-[1.02]"
-                    >
-                        {loading ? 'Signing In...' : 'Sign In'}
-                    </button>
-                </form>
-
-                <p className="text-center text-gray-400 text-sm">
-                    Don't have an account?{' '}
-                    <Link to="/register" className="text-blue-400 hover:text-blue-300 font-medium">
-                        Sign up
-                    </Link>
-                </p>
             </div>
         </div>
     );
