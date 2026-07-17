@@ -5,17 +5,9 @@ A full-stack e-commerce solution built with the MERN stack, featuring secure aut
 ## 🚀 Live Demo
 
 Live URL:
-https://your-project-url.com
+(https://youtu.be/BopQiD2b2BA?si=n0SB3y4p0r2EmWiz)
 
-## 📸 Screenshots
 
-Add screenshots here:
-
-- Homepage
-- Product catalog
-- Checkout and payment flows
-- AI chatbot assistant
-- Admin dashboard
 
 ## 📌 Project Overview
 
@@ -331,9 +323,9 @@ Aftab Jamil
 
 MERN Stack Developer
 
-Portfolio: https://your-portfolio.com
+Portfolio: https://aipoweredecommerecevercelapp.vercel.app/
 
-GitHub: https://github.com/your-username
+GitHub: (https://github.com/aftabjamil760-ctrl/ai-powered-ecommerece)
 
 ## ⭐ Support
 
