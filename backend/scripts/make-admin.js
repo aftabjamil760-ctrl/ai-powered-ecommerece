@@ -5,8 +5,8 @@ const User = require('../models/User');
 
 dotenv.config();
 
-const ADMIN_EMAIL = 'aftabjamil1056@gmail.com';
-const ADMIN_PASSWORD = 'Aftab@1056?';
+const ADMIN_EMAIL = 'aftabjamil760@gmail.com';
+const ADMIN_PASSWORD = 'aftab@760?';
 
 async function makeAdmin() {
   await mongoose.connect(process.env.MONGODB_URI);

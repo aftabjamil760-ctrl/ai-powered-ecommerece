@@ -13,7 +13,7 @@ Add screenshots here:
 
 - Homepage
 - Product catalog
-- Checkout and payment flow
+- Checkout and payment flows
 - AI chatbot assistant
 - Admin dashboard
 
