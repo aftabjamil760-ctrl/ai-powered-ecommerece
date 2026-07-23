@@ -68,6 +68,20 @@ export const getPaymentHistory = async () => {
   }
 };
 
+export const getAdminPaymentHistory = async () => {
+  try {
+    const response = await fetch(`${API_BASE_URL}/history/admin`, {
+      headers: getHeaders()
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed to fetch admin payment history');
+    return data.payments;
+  } catch (error) {
+    console.error('Error in getAdminPaymentHistory:', error);
+    throw error;
+  }
+};
+
 export const mockPayment = async (paymentData) => {
     try {
       const response = await fetch(`${API_BASE_URL}/mock`, {

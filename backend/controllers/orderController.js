@@ -1,9 +1,12 @@
 
+const mongoose = require('mongoose');
 const Order = require('../models/Order');
 const Product = require('../models/Product');
 const Payment = require('../models/Payment');
 const Notification = require('../models/Notification');
 const { processPayment, verifyStripePayment } = require('../utils/paymentService');
+const { generateOrderInvoice } = require('../utils/invoiceService');
+const { sendOrderConfirmation } = require('../utils/emailService');
 
 // Create Order and Initialize Stripe Payment
 exports.createOrder = async (req, res) => {
@@ -13,7 +16,18 @@ exports.createOrder = async (req, res) => {
     let totalAmount = 0;
 
     for (const item of products) {
-      const product = await Product.findById(item.productId);
+      let product = null;
+      if (mongoose.isValidObjectId(item.productId)) {
+        product = await Product.findById(item.productId);
+      }
+
+      if (!product) {
+        const numericId = Number(item.productId);
+        if (!Number.isNaN(numericId)) {
+          product = await Product.findOne({ id: numericId });
+        }
+      }
+
       if (!product) throw new Error(`Product ${item.productId} not found`);
       if (product.stock < item.quantity) throw new Error(`Insufficient stock for ${product.name}`);
       
@@ -75,9 +89,18 @@ exports.paymentSuccess = async (req, res) => {
 
     // Update stock
     for (const item of order.products) {
-      await Product.findByIdAndUpdate(item.productId, {
-        $inc: { stock: -item.quantity }
-      });
+      if (mongoose.isValidObjectId(item.productId)) {
+        await Product.findByIdAndUpdate(item.productId, {
+          $inc: { stock: -item.quantity }
+        });
+      } else {
+        const numericId = Number(item.productId);
+        if (!Number.isNaN(numericId)) {
+          await Product.findOneAndUpdate({ id: numericId }, {
+            $inc: { stock: -item.quantity }
+          });
+        }
+      }
     }
 
     order.paymentStatus = 'success';
@@ -98,6 +121,11 @@ exports.paymentSuccess = async (req, res) => {
       metadata: { orderId: order._id.toString() },
     });
 
+    const customer = await require('../models/User').findById(order.userId);
+    const invoicePath = await generateOrderInvoice(order, customer);
+    order.invoicePath = invoicePath;
+    await order.save();
+
     // Notify customer
     await Notification.create({
       userId: order.userId,
@@ -105,7 +133,18 @@ exports.paymentSuccess = async (req, res) => {
       message: `Payment received for Order #${order._id}. Your order has been handed over to the delivery team.`,
     });
 
-    res.json({ message: 'Payment successful. Order shipped.' });
+    console.log('Order paymentSuccess: sending order confirmation email to', customer?.email);
+    if (!customer?.email) {
+      console.warn('Order paymentSuccess: customer email is missing for order', order._id);
+    }
+
+    await sendOrderConfirmation(customer?.email || '', {
+      ...order.toObject(),
+      invoicePath,
+      customerName: customer?.name || 'Customer'
+    });
+
+    res.json({ message: 'Payment successful. Order shipped.', invoicePath });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -142,6 +181,42 @@ exports.getMyOrders = async (req, res) => {
       .sort({ createdAt: -1 })
       .populate('products.productId', 'name');
     res.json(orders);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+// Admin: Get all orders with user and product details
+exports.getAllOrders = async (req, res) => {
+  try {
+    const orders = await Order.find({})
+      .sort({ createdAt: -1 })
+      .populate('userId', 'name email')
+      .populate('products.productId', 'name category price');
+
+    res.json({ success: true, orders });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+exports.downloadInvoice = async (req, res) => {
+  try {
+    const order = await Order.findById(req.params.orderId);
+    if (!order) return res.status(404).json({ error: 'Order not found' });
+
+    if (order.userId?.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+      return res.status(403).json({ error: 'Not authorized' });
+    }
+
+    if (!order.invoicePath) {
+      const customer = await require('../models/User').findById(order.userId);
+      const invoicePath = await generateOrderInvoice(order, customer);
+      order.invoicePath = invoicePath;
+      await order.save();
+    }
+
+    res.download(order.invoicePath);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

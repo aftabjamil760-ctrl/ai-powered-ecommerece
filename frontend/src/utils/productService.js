@@ -4,6 +4,18 @@
 
 const API_BASE_URL = '/api/products';
 
+export const getAllProducts = async (category = '') => {
+  try {
+    const url = category ? `${API_BASE_URL}?category=${encodeURIComponent(category)}` : `${API_BASE_URL}`;
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Failed to fetch products');
+    return await response.json();
+  } catch (error) {
+    console.error('Error in getAllProducts:', error);
+    throw error;
+  }
+};
+
 export const getTopProducts = async () => {
   try {
     const response = await fetch(`${API_BASE_URL}/top`);

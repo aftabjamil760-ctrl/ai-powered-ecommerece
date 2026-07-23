@@ -5,7 +5,9 @@
   "main": "index.js",
   "scripts": {
     "start": "nodemon index.js",
+    "test": "node --test",
     "seed:products": "node scripts/seedProducts.js",
+    "seed:local-products": "node scripts/seedLocalProducts.js",
     "seed:embeddings": "node scripts/seedProductEmbeddings.js",
     "test-chatbot": "node scripts/testChatbot.js",
     "test-hf": "node chatbot/scripts/testhuggingface.js",
@@ -44,6 +46,7 @@
     "nodemailer": "^9.0.1",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
+    "pdfkit": "^0.19.1",
     "stripe": "^22.2.3"
   },
   "devDependencies": {

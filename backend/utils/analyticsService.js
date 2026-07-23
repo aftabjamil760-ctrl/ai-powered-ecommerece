@@ -468,13 +468,14 @@ class AnalyticsService {
         }
       ]);
 
-      const topCustomers = await CustomerAnalytics.find()
-        .sort({ lifetimeValue: -1 })
-        .limit(10)
+      const customers = await CustomerAnalytics.find()
+        .sort({ totalOrders: -1 })
         .populate('userId', 'name email')
-        .select('userId totalOrders totalSpent lifetimeValue customerSegment');
+        .select('userId totalOrders totalSpent lifetimeValue customerSegment customerSegment orders');
 
-      return { totalCustomers, newCustomers, segments: customerSegments, topCustomers };
+      const topCustomers = customers.slice(0, 10);
+
+      return { totalCustomers, newCustomers, segments: customerSegments, topCustomers, customers };
     } catch (error) {
       logger.error('Error getting customer analytics:', error);
       throw error;

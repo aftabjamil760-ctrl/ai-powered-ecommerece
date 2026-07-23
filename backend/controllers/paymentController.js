@@ -113,3 +113,17 @@ exports.getPaymentHistory = async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 };
+
+// Admin: Get all payment transactions
+exports.getAdminPaymentHistory = async (req, res) => {
+  try {
+    const payments = await Payment.find({})
+      .sort({ createdAt: -1 })
+      .populate('userId', 'name email')
+      .populate('orderId', 'totalAmount paymentStatus');
+
+    res.json({ success: true, payments });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+};

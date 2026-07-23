@@ -1,20 +1,53 @@
 import React, { Component } from 'react';
-import { Routes, Route } from 'react-router-dom';
-import Login from './pages/Login';
-import Register from './pages/Register';
-import VerifySuccess from './pages/VerifySuccess';
-import VerifyCode from './pages/VerifyCode';
-import GoogleCallback from './pages/GoogleCallback';
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
+import Login from './pages/auth/Login';
+import Register from './pages/auth/Register';
+import VerifySuccess from './pages/auth/VerifySuccess';
+import VerifyCode from './pages/auth/VerifyCode';
+import GoogleCallback from './pages/auth/GoogleCallback';
 import Home from './pages/Home';
-import Products from './pages/Products';
-import ProductDetails from './pages/ProductDetails';
-import Orders from './pages/Orders';
-import Checkout from './pages/Checkout';
-import Payments from './pages/Payments';
-import PaymentStatus from './pages/PaymentStatus';
-import FeedbackPage from './pages/FeedbackPage';
-import Analytics from './pages/Analytics';
-import Chatbot from './components/Chatbot';
+import CustomerProducts from './pages/customer/Products';
+import Cart from './pages/customer/Cart';
+import CustomerProductDetails from './pages/customer/ProductDetails';
+import CustomerOrders from './pages/customer/Orders';
+import CustomerCheckout from './pages/customer/Checkout';
+import CustomerPayments from './pages/customer/Payments';
+import CustomerPaymentStatus from './pages/customer/PaymentStatus';
+import CustomerFeedbackPage from './pages/customer/FeedbackPage';
+import CustomerSettings from './pages/customer/Settings';
+import CustomerNotificationPage from './pages/customer/NotificationPage';
+import AdminAnalytics from './pages/admin/Analytics';
+import AdminCustomers from './pages/admin/Customers';
+import AdminOrders from './pages/admin/Orders';
+import AdminPayments from './pages/admin/Payments';
+import AdminFeedbackPage from './pages/admin/FeedbackPage';
+import AdminReports from './pages/admin/Reports';
+import AdminSettings from './pages/admin/Settings';
+import AdminNotificationPage from './pages/admin/NotificationPage';
+import Chatbot from './components/chatbot/Chatbot';
+
+const getStoredUser = () => {
+  try {
+    return JSON.parse(localStorage.getItem('user') || 'null');
+  } catch {
+    return null;
+  }
+};
+
+const RoleRoute = ({ allowedRole, children }) => {
+  const user = getStoredUser();
+  const location = useLocation();
+
+  if (!user) {
+    return <Navigate to="/login" state={{ from: location.pathname }} replace />;
+  }
+
+  if (user.role !== allowedRole) {
+    return <Navigate to={user.role === 'admin' ? '/admin/dashboard' : '/'} replace />;
+  }
+
+  return children;
+};
 
 class ErrorBoundary extends Component {
   constructor(props) {
@@ -62,23 +95,35 @@ const App = () => {
     <ErrorBoundary>
       <div className="min-h-screen">
         <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/products" element={<Products />} />
-          <Route path="/product/:id" element={<ProductDetails />} />
-          <Route path="/orders" element={<Orders />} />
-          <Route path="/checkout" element={<Checkout />} />
-          <Route path="/payments" element={<Payments />} />
-          <Route path="/payment-success" element={<PaymentStatus />} />
-          <Route path="/payment-cancel" element={<PaymentStatus />} />
-          <Route path="/feedback" element={<FeedbackPage />} />
-          <Route path="/analytics" element={<Analytics />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/verify-success" element={<VerifySuccess />} />
           <Route path="/verify-code" element={<VerifyCode />} />
           <Route path="/google-callback" element={<GoogleCallback />} />
-          # Add Chatbot route
-          <Route path="/chatbot" element={<Chatbot />} />
+
+          <Route path="/" element={<Home />} />
+          <Route path="/products" element={<CustomerProducts />} />
+          <Route path="/cart" element={<RoleRoute allowedRole="customer"><Cart /></RoleRoute>} />
+          <Route path="/product/:id" element={<RoleRoute allowedRole="customer"><CustomerProductDetails /></RoleRoute>} />
+          <Route path="/orders" element={<RoleRoute allowedRole="customer"><CustomerOrders /></RoleRoute>} />
+          <Route path="/checkout" element={<RoleRoute allowedRole="customer"><CustomerCheckout /></RoleRoute>} />
+          <Route path="/payments" element={<RoleRoute allowedRole="customer"><CustomerPayments /></RoleRoute>} />
+          <Route path="/payment-success" element={<RoleRoute allowedRole="customer"><CustomerPaymentStatus /></RoleRoute>} />
+          <Route path="/payment-cancel" element={<RoleRoute allowedRole="customer"><CustomerPaymentStatus /></RoleRoute>} />
+          <Route path="/feedback" element={<RoleRoute allowedRole="customer"><CustomerFeedbackPage /></RoleRoute>} />
+          <Route path="/settings" element={<RoleRoute allowedRole="customer"><CustomerSettings /></RoleRoute>} />
+          <Route path="/chatbot" element={<RoleRoute allowedRole="customer"><Chatbot /></RoleRoute>} />
+
+          <Route path="/admin/dashboard" element={<RoleRoute allowedRole="admin"><AdminAnalytics /></RoleRoute>} />
+          <Route path="/admin/products" element={<RoleRoute allowedRole="admin"><CustomerProducts /></RoleRoute>} />
+          <Route path="/admin/orders" element={<RoleRoute allowedRole="admin"><AdminOrders /></RoleRoute>} />
+          <Route path="/admin/customers" element={<RoleRoute allowedRole="admin"><AdminCustomers /></RoleRoute>} />
+          <Route path="/admin/payments" element={<RoleRoute allowedRole="admin"><AdminPayments /></RoleRoute>} />
+          <Route path="/admin/feedback" element={<RoleRoute allowedRole="admin"><AdminFeedbackPage /></RoleRoute>} />
+          <Route path="/admin/notifications" element={<RoleRoute allowedRole="admin"><AdminNotificationPage /></RoleRoute>} />
+          <Route path="/admin/reports" element={<RoleRoute allowedRole="admin"><AdminReports /></RoleRoute>} />
+          <Route path="/admin/settings" element={<RoleRoute allowedRole="admin"><AdminSettings /></RoleRoute>} />
+          <Route path="/admin/chatbot" element={<RoleRoute allowedRole="admin"><Chatbot /></RoleRoute>} />
         </Routes>
       </div>
     </ErrorBoundary>

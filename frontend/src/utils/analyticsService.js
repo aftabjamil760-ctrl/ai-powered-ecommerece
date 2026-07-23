@@ -31,6 +31,14 @@ const analyticsService = {
   getDashboardStats: async () => {
     const response = await axios.get(`${API_URL}/dashboard`, getHeaders());
     return response.data;
+  },
+  exportReport: async ({ type = 'orders', startDate, endDate, format = 'csv' }) => {
+    const response = await axios.get(`${API_URL}/export`, {
+      params: { type, startDate, endDate, format },
+      ...getHeaders(),
+      responseType: format === 'csv' ? 'blob' : 'json'
+    });
+    return response;
   }
 };
 

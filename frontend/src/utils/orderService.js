@@ -42,6 +42,23 @@ export const getMyOrders = async () => {
   }
 };
 
+export const getAdminOrders = async () => {
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE_URL}/admin`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error || 'Failed to fetch admin orders');
+    return data.orders;
+  } catch (error) {
+    console.error('Error in getAdminOrders:', error);
+    throw error;
+  }
+};
+
 export const confirmPayment = async (orderId, paymentId) => {
     try {
       const token = localStorage.getItem('token');
@@ -60,3 +77,32 @@ export const confirmPayment = async (orderId, paymentId) => {
       throw error;
     }
   };
+
+export const downloadInvoice = async (orderId) => {
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE_URL}/${orderId}/invoice`, {
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    if (!response.ok) {
+      const errData = await response.json();
+      throw new Error(errData.error || 'Failed to download invoice');
+    }
+
+    const blob = await response.blob();
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `invoice-${orderId}.pdf`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  } catch (error) {
+    console.error('Error in downloadInvoice:', error);
+    throw error;
+  }
+};

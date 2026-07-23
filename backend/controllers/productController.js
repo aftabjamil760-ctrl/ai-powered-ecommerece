@@ -1,10 +1,40 @@
 
+const mongoose = require('mongoose');
 const Product = require('../models/Product');
+
+const findProductByIdentifier = async (identifier) => {
+  if (mongoose.isValidObjectId(identifier)) {
+    const product = await Product.findById(identifier);
+    if (product) return product;
+  }
+
+  const numericId = Number(identifier);
+  if (!Number.isNaN(numericId)) {
+    const product = await Product.findOne({ id: numericId });
+    if (product) return product;
+  }
+
+  return null;
+};
+
+// Get all products or filter by category
+exports.getAllProducts = async (req, res) => {
+  try {
+    const { category } = req.query;
+    const query = {};
+
+    if (category) query.category = category;
+
+    const products = await Product.find(query).sort({ createdAt: -1 });
+    res.json(products);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
 
 // Get top products (Directly from Local DB for high performance)
 exports.getTopProducts = async (req, res) => {
   try {
-    // Top creators fetch directly from DB to avoid external API network latency
     const products = await Product.find().sort({ createdAt: -1 }).limit(20);
     res.json(products);
   } catch (error) {
@@ -39,14 +69,13 @@ exports.searchProducts = async (req, res) => {
 exports.getProductDetails = async (req, res) => {
   try {
     const { id } = req.params;
-    const product = await Product.findById(id);
-        
+    const product = await findProductByIdentifier(id);
+
     if (!product) return res.status(404).json({ error: 'Product not found' });
-        
-    // Calculate final price based on discount
+
     const discountAmount = product.discount ? (product.price * (product.discount / 100)) : 0;
     const finalPrice = product.price - discountAmount;
-        
+
     res.json({
       ...product.toObject(),
       finalPrice: Number(finalPrice.toFixed(2))

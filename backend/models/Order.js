@@ -15,6 +15,7 @@ const orderSchema = new mongoose.Schema({
   orderStatus: { type: String, enum: ['processing', 'shipped', 'delivered', 'cancelled'], default: 'processing' },
   deliveryAddress: Object,
   paymentId: String,
+  invoicePath: String,
   createdAt: { type: Date, default: Date.now }
 });
 

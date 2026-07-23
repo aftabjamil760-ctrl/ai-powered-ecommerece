@@ -1,4 +1,4 @@
-import React, { createContext, useState, useEffect, useContext } from 'react';
+import React, { createContext, useState, useEffect, useContext, useRef } from 'react';
 import axios from 'axios';
 
 const NotificationContext = createContext();
@@ -8,19 +8,32 @@ export const useNotifications = () => useContext(NotificationContext);
 export const NotificationProvider = ({ children }) => {
     const [notifications, setNotifications] = useState([]);
     const [unreadCount, setUnreadCount] = useState(0);
+    const intervalRef = useRef(null);
 
     const fetchNotifications = async () => {
         try {
             const token = localStorage.getItem('token');
-            if (!token) return;
+            if (!token) {
+                setNotifications([]);
+                setUnreadCount(0);
+                return;
+            }
 
             const res = await axios.get('/api/notifications', {
-                headers: { Authorization: `Bearer ${token}` }
+                headers: { Authorization: `Bearer ${token}` },
+                timeout: 2500,
             });
-            setNotifications(res.data);
-            setUnreadCount(res.data.filter(n => !n.isRead).length);
-        } catch (error) {
-            console.error('Error fetching notifications:', error);
+
+            const notificationList = Array.isArray(res.data) ? res.data : [];
+            setNotifications(notificationList);
+            setUnreadCount(notificationList.filter((n) => !n.isRead).length);
+        } catch {
+            setNotifications([]);
+            setUnreadCount(0);
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+                intervalRef.current = null;
+            }
         }
     };
 
@@ -28,18 +41,25 @@ export const NotificationProvider = ({ children }) => {
         try {
             const token = localStorage.getItem('token');
             await axios.put(`/api/notifications/${id}/read`, {}, {
-                headers: { Authorization: `Bearer ${token}` }
+                headers: { Authorization: `Bearer ${token}` },
+                timeout: 2500,
             });
             fetchNotifications();
-        } catch (error) {
-            console.error('Error marking notification as read:', error);
+        } catch {
+            setNotifications([]);
+            setUnreadCount(0);
         }
     };
 
     useEffect(() => {
         fetchNotifications();
-        const interval = setInterval(fetchNotifications, 30000); // Poll every 30s
-        return () => clearInterval(interval);
+        intervalRef.current = setInterval(fetchNotifications, 30000);
+
+        return () => {
+            if (intervalRef.current) {
+                clearInterval(intervalRef.current);
+            }
+        };
     }, []);
 
     return (

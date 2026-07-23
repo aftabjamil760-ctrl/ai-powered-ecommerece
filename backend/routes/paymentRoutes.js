@@ -3,6 +3,7 @@ const express = require('express');
 const router = express.Router();
 const paymentController = require('../controllers/paymentController');
 const { protect } = require('../middleware/authMiddleware');
+const adminAuth = require('../middleware/adminAuthMiddleware');
 
 /**
  * @route   POST /api/payments/create
@@ -42,5 +43,12 @@ router.post('/refund', protect, paymentController.refundPayment);
  * @access  Private
  */
 router.get('/history', protect, paymentController.getPaymentHistory);
+
+/**
+ * @route   GET /api/payments/history/admin
+ * @desc    Get payment history for admin
+ * @access  Private (Admin)
+ */
+router.get('/history/admin', protect, adminAuth, paymentController.getAdminPaymentHistory);
 
 module.exports = router;

@@ -12,6 +12,10 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+transporter.verify()
+  .then(() => console.log('Email transporter verified successfully.'))
+  .catch((error) => console.error('Email transporter verification failed:', error));
+
 /**
  * Send 6-Digit OTP verification email to user
  * @param {string} email - User's email
@@ -63,22 +67,31 @@ exports.sendOrderConfirmation = async (email, order) => {
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
           <h2 style="color: #4CAF50;">📦 Order Confirmed!</h2>
-          <p>Thank you for your purchase. Your payment was processed successfully via Stripe.</p>
+          <p>Hi ${order.customerName || 'Customer'}, thank you for your purchase. Your payment was processed successfully via Stripe.</p>
           
           <div style="background-color: #f9f9f9; padding: 15px; border-radius: 5px; margin: 20px 0; border-left: 4px solid #4CAF50;">
             <h3 style="margin-top: 0;">Order Summary</h3>
             <p><strong>Order ID:</strong> ${order._id}</p>
             <p><strong>Order Date:</strong> ${new Date(order.createdAt).toLocaleDateString()}</p>
-            <p><strong>Total Amount:</strong> $${order.totalAmount.toFixed(2)}</p>
+            <p><strong>Total Amount:</strong> $${Number(order.totalAmount || 0).toFixed(2)}</p>
             <p><strong>Status:</strong> Shipped</p>
           </div>
           
+          <p>Your invoice is attached below for download or printing.</p>
           <p>You can track the live status of your delivery directly from your account dashboard.</p>
           <hr style="border: none; border-top: 1px solid #eee;">
           <p style="font-size: 12px; color: #999; text-align: center;">This is an automated receipt. Please do not reply directly.</p>
         </div>
       `,
+      attachments: []
     };
+
+    if (order.invoicePath) {
+      mailOptions.attachments.push({
+        filename: `invoice-${order._id}.pdf`,
+        path: order.invoicePath
+      });
+    }
 
     await transporter.sendMail(mailOptions);
     console.log('Order confirmation email sent to:', email);

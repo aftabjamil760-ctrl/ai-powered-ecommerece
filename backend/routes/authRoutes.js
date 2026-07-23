@@ -19,7 +19,7 @@ router.get('/google/callback',
   passport.authenticate('google', { session: false, failureRedirect: '/login' }),
   (req, res) => {
     // Generate JWT token for Google authenticated user
-    const token = jwt.sign({ userId: req.user._id }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const token = jwt.sign({ userId: req.user._id }, process.env.JWT_SECRET, { expiresIn: '30d' });
         
     // Redirect to frontend with token & user info
     res.redirect(`${process.env.PORTFOLIO_URL}/google-callback?token=${token}&user=${encodeURIComponent(JSON.stringify({
