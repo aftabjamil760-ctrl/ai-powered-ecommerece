@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { motion } from "framer-motion";
 import { FaCcVisa, FaCcMastercard, FaCcAmex, FaPaypal, FaApplePay, FaGooglePay } from "react-icons/fa";
 import { FiPlus, FiShield, FiLock } from "react-icons/fi";
 

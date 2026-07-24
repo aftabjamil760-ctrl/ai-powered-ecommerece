@@ -1,5 +1,11 @@
 
 const User = require('../models/User');
+const Order = require('../models/Order');
+const Payment = require('../models/Payment');
+const Notification = require('../models/Notification');
+const Feedback = require('../models/Feedback');
+const ChatSession = require('../chatbot/models/ChatSession');
+const ChatMessage = require('../chatbot/models/ChatMessage');
 const jwt = require('jsonwebtoken');
 const { sendVerificationEmail } = require('../utils/emailService');
 const bcrypt = require('bcryptjs');
@@ -92,7 +98,29 @@ exports.login = async (req, res) => {
 // Delete Account
 exports.deleteAccount = async (req, res) => {
   try {
-    await User.findByIdAndDelete(req.user._id);
+    const userId = req.user._id;
+
+    const userOrders = await Order.find({ userId }).select('invoicePath');
+    for (const order of userOrders) {
+      if (order.invoicePath) {
+        try {
+          const fs = require('node:fs');
+          if (fs.existsSync(order.invoicePath)) {
+            fs.unlinkSync(order.invoicePath);
+          }
+        } catch (fileErr) {
+          console.warn('Could not delete invoice file:', order.invoicePath, fileErr.message);
+        }
+      }
+    }
+
+    await Order.deleteMany({ userId });
+    await Payment.deleteMany({ userId });
+    await Notification.deleteMany({ userId });
+    await Feedback.deleteMany({ userId });
+    await ChatSession.deleteMany({ userId });
+    await ChatMessage.deleteMany({ userId });
+    await User.findByIdAndDelete(userId);
     res.json({ message: 'User account deleted successfully' });
   } catch (error) {
     res.status(500).json({ error: error.message });

@@ -35,10 +35,25 @@ export const Sidebar = () => {
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  const handleLogout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    navigate('/login');
+  const handleLogout = async () => {
+    try {
+      const token = localStorage.getItem('token');
+      if (token) {
+        await fetch('/api/auth/delete', {
+          method: 'DELETE',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+        });
+      }
+    } catch (err) {
+      console.error('Failed to delete user account during logout:', err);
+    } finally {
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      navigate('/login');
+    }
   };
 
   const sidebar = (

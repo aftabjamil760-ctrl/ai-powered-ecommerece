@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { motion } from "framer-motion";
 import { FiMail, FiLock, FiArrowRight } from "react-icons/fi";
 import { FcGoogle } from "react-icons/fc";
 import { FaApple } from "react-icons/fa";

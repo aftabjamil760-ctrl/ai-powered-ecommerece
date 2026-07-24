@@ -16,6 +16,11 @@ const orderSchema = new mongoose.Schema({
   deliveryAddress: Object,
   paymentId: String,
   invoicePath: String,
+  customerEmail: { type: String, default: '' },
+  emailSent: { type: Boolean, default: false },
+  emailSendAttempts: { type: Number, default: 0 },
+  emailLastError: { type: String, default: '' },
+  emailSentAt: Date,
   createdAt: { type: Date, default: Date.now }
 });
 

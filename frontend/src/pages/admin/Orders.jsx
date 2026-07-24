@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getAdminOrders, downloadInvoice } from '../../utils/orderService';
+import { getAdminOrders, downloadInvoice, resendInvoice } from '../../utils/orderService';
 import { Link } from 'react-router-dom';
 import DashboardLayout, { EmptyState, GradientButton, LoadingSkeleton, PageHeader, SearchInput, SectionCard } from '../../components/dashboard/Layout';
 
@@ -69,11 +69,21 @@ const Orders = () => {
                                 <div className="col-span-1 text-sm font-semibold text-slate-900">{order.paymentStatus || 'pending'}</div>
                                 <div className="col-span-1 text-sm font-semibold text-slate-900">{order.orderStatus || 'processing'}</div>
                                 <div className="col-span-2 text-sm text-slate-500">{new Date(order.createdAt).toLocaleDateString()}</div>
-                                <div className="col-span-1">
+                                <div className="col-span-1 text-sm text-slate-900">
+                                    <div className="text-xs text-slate-500 mb-2">{order.userId?.email || order.customerEmail || 'no-email'}</div>
+                                    <div className="text-xs text-slate-500 mb-2">{order.customerEmail ? `Invoice sent to ${order.customerEmail}` : 'Invoice email missing'}</div>
+                                    <div className="text-xs text-slate-500">Attempts: {order.emailSendAttempts ?? 0}</div>
+                                </div>
+                                <div className="col-span-1 flex flex-col gap-2">
                                     {order.paymentStatus === 'success' ? (
-                                        <button onClick={() => downloadInvoice(order._id)} className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
-                                            Download
-                                        </button>
+                                        <>
+                                            <button onClick={() => downloadInvoice(order._id)} className="rounded-full border border-slate-200 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50">
+                                                Download
+                                            </button>
+                                            <button onClick={() => resendInvoice(order._id)} className="rounded-full border border-blue-200 bg-blue-50 px-3 py-2 text-[10px] font-semibold text-blue-700 transition hover:bg-blue-100">
+                                                Resend
+                                            </button>
+                                        </>
                                     ) : (
                                         <span className="text-xs text-slate-400">N/A</span>
                                     )}

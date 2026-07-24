@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { motion } from "framer-motion";
 import { FiHeart, FiShoppingBag, FiTrash2 } from "react-icons/fi";
 import { products } from "../lib/products";
 

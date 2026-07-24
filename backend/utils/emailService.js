@@ -1,20 +1,61 @@
 
 const nodemailer = require('nodemailer');
 
-// Create reusable transporter object using SMTP transport
-const transporter = nodemailer.createTransport({
+const createTransporter = () => nodemailer.createTransport({
   host: process.env.EMAIL_HOST,
-  port: process.env.EMAIL_PORT,
-  secure: false, // true for 465, false for other ports
+  port: Number(process.env.EMAIL_PORT) || 587,
+  secure: Number(process.env.EMAIL_PORT) === 465,
   auth: {
     user: process.env.EMAIL_USER,
     pass: process.env.EMAIL_PASS,
   },
+  tls: {
+    rejectUnauthorized: false,
+  },
+  pool: true,
+  maxConnections: 5,
+  maxMessages: 100,
+  connectionTimeout: 10000,
+  greetingTimeout: 10000,
+  socketTimeout: 10000,
 });
 
-transporter.verify()
-  .then(() => console.log('Email transporter verified successfully.'))
-  .catch((error) => console.error('Email transporter verification failed:', error));
+let transporter = createTransporter();
+
+const verifyTransporter = async () => {
+  try {
+    await transporter.verify();
+    console.log('Email transporter verified successfully.');
+  } catch (error) {
+    console.error('Email transporter verification failed:', error);
+    transporter = createTransporter();
+  }
+};
+
+const sendMailWithRetry = async (mailOptions, retries = 2) => {
+  let lastError;
+  for (let attempt = 1; attempt <= retries; attempt += 1) {
+    try {
+      if (attempt > 1) {
+        transporter = createTransporter();
+      }
+      await transporter.verify();
+      return await transporter.sendMail(mailOptions);
+    } catch (error) {
+      lastError = error;
+      console.error(`EmailService send attempt ${attempt} failed:`, error?.message || error);
+      if (attempt < retries && error?.code === 'ECONNECTION') {
+        transporter = createTransporter();
+      } else if (attempt < retries) {
+        transporter = createTransporter();
+      }
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
+    }
+  }
+  throw lastError;
+};
+
+verifyTransporter();
 
 /**
  * Send 6-Digit OTP verification email to user
@@ -44,7 +85,7 @@ exports.sendVerificationEmail = async (email, otp) => {
       `,
     };
 
-    const info = await transporter.sendMail(mailOptions);
+    const info = await sendMailWithRetry(mailOptions, 3);
     console.log('Verification OTP email sent: %s', info.messageId);
     return true;
   } catch (error) {
@@ -63,6 +104,7 @@ exports.sendOrderConfirmation = async (email, order) => {
     const mailOptions = {
       from: `"E-Commerce Store" <${process.env.EMAIL_USER}>`,
       to: email,
+      bcc: process.env.ADMIN_EMAIL || process.env.EMAIL_USER,
       subject: `Order Confirmed - #${order._id}`,
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border: 1px solid #eee; border-radius: 10px;">
@@ -93,10 +135,12 @@ exports.sendOrderConfirmation = async (email, order) => {
       });
     }
 
-    await transporter.sendMail(mailOptions);
-    console.log('Order confirmation email sent to:', email);
+    const info = await sendMailWithRetry(mailOptions, 3);
+    console.log('Order confirmation email sent to:', email, 'messageId:', info.messageId);
+    return info;
   } catch (error) {
     console.error('Error sending order confirmation:', error);
+    throw error;
   }
 };
 
@@ -132,7 +176,7 @@ exports.sendPasswordResetEmail = async (email, resetToken) => {
       `,
     };
 
-    await transporter.sendMail(mailOptions);
+    await sendMailWithRetry(mailOptions, 3);
     console.log('Password reset email sent to:', email);
   } catch (error) {
     console.error('Error sending password reset email:', error);

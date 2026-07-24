@@ -106,3 +106,25 @@ export const downloadInvoice = async (orderId) => {
     throw error;
   }
 };
+
+export const resendInvoice = async (orderId) => {
+  try {
+    const token = localStorage.getItem('token');
+    const response = await fetch(`${API_BASE_URL}/${orderId}/resend-invoice`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`
+      }
+    });
+
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || 'Failed to resend invoice');
+    }
+
+    return data;
+  } catch (error) {
+    console.error('Error in resendInvoice:', error);
+    throw error;
+  }
+};

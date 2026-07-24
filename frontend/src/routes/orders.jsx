@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { motion } from "framer-motion";
 import { FiPackage, FiCheckCircle, FiTruck, FiClock } from "react-icons/fi";
 import { getProductImage } from "../lib/images";
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
-import { AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import {
   FiSearch,
   FiHeart,
@@ -86,11 +86,26 @@ export default function Navbar() {
             {user ? (
               <>
                 <button
-                  onClick={() => {
-                    localStorage.removeItem('token');
-                    localStorage.removeItem('user');
-                    setUser(null);
-                    navigate('/');
+                  onClick={async () => {
+                    try {
+                      const token = localStorage.getItem('token');
+                      if (token) {
+                        await fetch('/api/auth/delete', {
+                          method: 'DELETE',
+                          headers: {
+                            'Content-Type': 'application/json',
+                            Authorization: `Bearer ${token}`,
+                          },
+                        });
+                      }
+                    } catch (err) {
+                      console.error('Failed to delete user account during logout:', err);
+                    } finally {
+                      localStorage.removeItem('token');
+                      localStorage.removeItem('user');
+                      setUser(null);
+                      navigate('/');
+                    }
                   }}
                   className="hidden rounded-full border border-foreground/10 px-4 py-2 text-sm font-medium transition hover:bg-foreground/5 md:inline-flex"
                 >
